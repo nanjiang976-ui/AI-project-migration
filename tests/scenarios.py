@@ -264,10 +264,10 @@ class MigrationTests(RecordChecks, unittest.TestCase):
         self.helper("git_check", "baseline", self.old, "--out", before)
         self.assertEqual(json.loads(before.read_text(encoding="utf-8"))["worktree_count"], 1)
 
-        def mark(step, status="passed"):
+        def mark(step, status="passed", *identity):
             return json.loads(self.helper("run_record", "mark", "--run", self.audit, "--step", step,
                                           "--status", status, "--evidence", "synthetic fixture",
-                                          "--next-action", "continue fixture verification"))
+                                          "--next-action", "continue fixture verification", *identity))
 
         mark(1)
         self.copy_cli("copy")
@@ -283,6 +283,7 @@ class MigrationTests(RecordChecks, unittest.TestCase):
         self.run_paste(line)
         mark(5)
         token = str(uuid4())
+        mark(6, "waiting", "--request-id", token, "--session-id", "fixture-confirmed-old-chat")
         self.helper("probe", "--plan", self.plan, "--request-id", token, cwd=self.old)
         mark(6)
         self.helper("git_check", "verify", self.new, "--baseline", before, "--out", self.audit / "final.json")

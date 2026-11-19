@@ -6,7 +6,12 @@ import json
 import os
 from pathlib import Path
 import sys
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from cutover import MigrationError, save_exclusive
+
+
+FINISHED = {"passed", "not_applicable", "unverified"}
 
 
 def timestamp():
@@ -17,23 +22,12 @@ def absolute(value):
     path = Path(value)
     if not path.is_absolute() or path == Path(path.anchor) or ".." in path.parts:
         raise ValueError(f"Choose an absolute path below the volume root: {value}")
-    if os.name == "nt" and (len(path.drive) != 2 or any(x.endswith((" ", ".")) or Path(x).is_reserved()
-           or any(c in '<>:"|?*' or ord(c) < 32 for c in x) for x in path.parts[1:])):
-        raise ValueError(f"Invalid local path: {value}")
-    return path
-
-
-def store_new(path, data):
-    temp = path.with_name(f".{uuid4().hex}.partial")
-    with temp.open("x", encoding="utf-8") as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
     if os.name == "nt":
-        os.rename(temp, path)
-    else:
-        os.link(temp, path)  # Atomic publication without replacing a concurrent event.
-        temp.unlink()
+        for part in path.parts[1:]:
+            if (len(path.drive) != 2 or part.endswith((" ", ".")) or Path(part).is_reserved()
+                    or any(c in '<>:"|?*' or ord(c) < 32 for c in part)):
+                raise ValueError(f"Invalid local path: {value}")
+    return path
 
 
 def read(path):
@@ -42,21 +36,18 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def volume_ids(old, new):
+def volumes(old, new):
     if sys.platform == "darwin":
         import mac_fs
-        return [mac_fs.volume(p) for p in (old, new)]
-    import migration_ntfs as nt
-    for p in (old,new):
-        nt.volume(p)
-    return [nt.physical(p).drive.casefold() for p in (old,new)]
-
-
-def volumes(old, new):
-    source, target = volume_ids(old, new)
+        source, target = (mac_fs.volume(p) for p in (old, new))
+    else:
+        import migration_ntfs as nt
+        for path in (old, new):
+            nt.volume(path)
+        source, target = (nt.physical(p).drive.casefold() for p in (old, new))
     same = source == target
-    return dict(source_volume=source, target_volume=target, same_volume=same,
-                message="这次移动不会释放该卷空间。确认仍要整理目录后再继续。" if same else "源和目标是不同的本地卷。")
+    message = "这次移动不会释放该卷空间。确认仍要整理目录后再继续。" if same else "源和目标是不同的本地卷。"
+    return dict(source_volume=source, target_volume=target, same_volume=same, message=message)
 
 
 def create_run(args, run):
@@ -72,14 +63,13 @@ def create_run(args, run):
     paths = (old, new, backup, run)
     if os.name == "nt":
         import migration_ntfs as nt
-        roots = [nt.physical(p) for p in paths]
+        from tree_copy import check_disjoint
+        check_disjoint(paths)
     else:
         import mac_fs
-        roots = [mac_fs.checked_root(p) for p in paths]
-    for i, p in enumerate(roots):
-        for q in roots[i+1:]:
-            if p.is_relative_to(q) or q.is_relative_to(p):
-                raise ValueError("Keep the source, target, backup and audit paths separate.")
+        from mac_tree import disjoint
+        disjoint([mac_fs.checked_root(p) for p in paths])
+
     vol = volumes(old, new)
     if vol["same_volume"] and not args.allow_same_volume:
         raise ValueError(vol["message"] + " (--allow-same-volume)")
@@ -90,163 +80,266 @@ def create_run(args, run):
         nt.restore_security(old, run, True)
     else:
         mac_fs.create_private(run)
-    store_new(run/"run.json", dict(version=2, migration_id=str(uuid4()), host=args.host,
-              project_id=args.project_id or None, source=str(old), target=str(new), backup=str(backup),
-              started=timestamp(), volumes=vol))
+    save_exclusive(run / "run.json", dict(version=2, migration_id=str(uuid4()), host=args.host,
+                   project_id=args.project_id or None, source=str(old), target=str(new),
+                   backup=str(backup), started=timestamp(), volumes=vol))
 
 
-def cleanup_check(config, run, chat_status):
-    """Check the latest completed backup verification, never a stale success ahead of a failed attempt."""
-    from cutover import state
-    phase, old, target, backup = state(run/"cutover-plan.json")
-    if (phase != "linked" or (str(old),str(target),str(backup)) !=
-            (config["source"], config["target"], config["backup"])):
-        return False, "旧路径、目标或备份身份未经确认"
-    if chat_status not in ("passed","not_applicable"):
-        return False, "旧会话核验尚有待处理项"
-    if chat_status == "passed":
-        receipts = (read(p) for p in run.glob("probe-*.json"))
-        if not any(p.get("same_file") and p.get("probe_removed") and p.get("old_write_d_read")
-                   and p.get("d_write_old_read") and not p.get("filesystem_only")
-                   and p.get("target") == str(target) and p.get("backup") == str(backup) for p in receipts):
-            return False, "缺少本次双向读写回执"
-    folder=run/"backup-check"
-    marker=max(folder.glob("*-started.json"),default=None)
-    if marker is None:
-        return False, "缺少清理前的备份复核记录"
-    tag=marker.name.removesuffix("-started.json")
-    begun=read(marker)
-    cmp=read(folder/(tag+"-verify.json"))
-    if any(cmp.get(k)!=v or begun.get(k)!=v for k,v in {
-            "action":"verify","run":tag,"source":str(backup),"destination":str(target)}.items()):
-        return False, "最新复核的现场与本次备份不匹配"
-    if cmp.get("status") not in ("passed","differences") or not isinstance(cmp.get("differences"),dict):
-        return False, "最近一次备份核验未完成"
-    diffs=cmp["differences"]
-    allowed_times={"."} if chat_status=="passed" else set()
-    before=read(run/"git-before.json")
-    if not before.get("ok") or before.get("root")!=str(old):
-        return False, "缺少已确认的 Git 基准"
-    if before["kind"]!="non_git":
-        checks=[]
-        for path in run.glob("*.json"):
-            if path.name in ("cutover-plan.json","git-before.json","run.json"): continue
-            doc=read(path)
-            if isinstance(doc,dict) and doc.get("mode")=="verify" and doc.get("root")==str(target):
-                checks.append(doc)
-        latest=max(checks,key=lambda item:item["utc"],default={})
-        if latest.get("ok") is not True or latest.get("kind")!=before["kind"]:
-            return False,"缺少成功的最新 Git 验收，或最新核验失败"
-        from git_check import verify as verify_git
-        verify_git(target,before["snapshot"])
-        for tree in before["snapshot"]["linked"]:
-            allowed_times.add(".git/worktrees/"+tree["admin"]+"/gitdir")
-    if (set(diffs)-{"mtime_ns"} or set(diffs.get("mtime_ns",[]))-allowed_times
-            or cmp.get("source_summary")!=cmp.get("destination_summary")):
-        return False,"备份有独有内容、两边存在差异或发生了未解释的变更"
-    # A previous success cannot authorize deleting a backup modified since that check.
-    if sys.platform=="darwin":
+def read_probe(config, run, binding):
+    """Only the registered request can establish filesystem evidence for this old session."""
+    if not binding.get("request_id") or not binding.get("session_id"):
+        raise ValueError("旧记录缺少已绑定的请求编号或原会话标识。请重新打开步骤 6，登记并复核。")
+    request = str(UUID(binding["request_id"]))
+    session = binding["session_id"]
+    receipt = read(run / f"probe-{request}.json")
+    if receipt.get("request_id") != request or receipt.get("target") != config["target"] or (
+            receipt.get("backup") != config["backup"]):
+        raise ValueError("指定读写回执的请求、目标或备份不匹配。")
+    flags = ("default_cwd_confirmed", "same_file", "backup_isolated", "probe_removed",
+             "old_write_d_read", "d_write_old_read")
+    if not all(receipt.get(k) is True for k in flags) or receipt.get("filesystem_only") is not False:
+        raise ValueError("指定请求必须对应完整的会话双向读写回执；纯文件系统测试不能作为旧会话证据。")
+    if receipt.get("old_path_link_verified") is not True or receipt.get("source") != config["source"]:
+        raise ValueError("指定请求未核实本次原名入口。")
+    form = receipt.get("cwd_form")
+    claimed = receipt.get("claimed_resumed_session_id")
+    if claimed is not None and claimed != session:
+        raise ValueError("回执声明的原会话 ID 与已登记会话不同。")
+    if form == "resolved_target":
+        if claimed != session or receipt.get("cwd") != config["target"]:
+            raise ValueError("解析至目标的默认目录缺少匹配的恢复会话标识或路径。")
+    elif form != "old_path" or receipt.get("cwd") != config["source"]:
+        raise ValueError("旧会话默认工作目录未通过核对。")
+
+
+def bind_probe(args, config, run, pending, events):
+    """Return the durable binding for a stage-six waiting or passed event."""
+    req = str(args.request_id) if args.request_id is not None else None
+    session = args.session_id
+    if session is not None and (not session or session != session.strip() or len(session) > 256
+                                or not session.isprintable()):
+        raise ValueError("Supply a non-empty host-confirmed original session ID.")
+    if args.status == "waiting":
+        if req is None and session is None:
+            return {}
+        if req is None or session is None:
+            raise ValueError("Register --request-id and --session-id together before the test.")
+        binding = dict(request_id=req, session_id=session)
+        if binding != pending:
+            previously_registered = any(e.get("request_id") == req for e in events)
+            if previously_registered or os.path.lexists(run / f"probe-{req}.json"):
+                raise ValueError("Choose a fresh request UUID and register it before running the probe.")
+        return binding
+    if pending is None:
+        raise ValueError("Register the old session and request as waiting before marking the test passed.")
+    if (req is not None and req != pending["request_id"]) or (
+            session is not None and session != pending["session_id"]):
+        raise ValueError("Step 6 must use the registered request UUID and the same session.")
+    read_probe(config, run, pending)
+    return pending
+
+
+def current_progress(events):
+    step = 1
+    completed_chat = None
+    pending = None
+    for event in events:
+        if event["status"] == "reopened":
+            step = event["step"]
+            if step <= 6:
+                completed_chat = None
+                pending = None
+        elif event["step"] == 6 and event["status"] == "waiting" and event.get("request_id"):
+            pending = dict(request_id=event["request_id"], session_id=event["session_id"])
+        elif event["status"] in FINISHED:
+            if event["step"] == 6:
+                completed_chat = event
+            step += 1
+    return step, completed_chat, pending
+
+
+def git_time_exceptions(run, old, target):
+    before = read(run / "git-before.json")
+    if not before.get("ok") or before.get("root") != str(old):
+        raise ValueError("缺少已确认的 Git 基准")
+    if before["kind"] == "non_git":
+        return set()
+    checks = []
+    for path in run.glob("*.json"):
+        if path.name in {"cutover-plan.json", "git-before.json", "run.json"}:
+            continue
+        if path.name.startswith(("event-", "probe-")):
+            continue
+        doc = read(path)
+        if isinstance(doc, dict) and doc.get("mode") == "verify" and doc.get("root") == str(target):
+            checks.append(doc)
+    latest = max(checks, key=lambda item: item["utc"], default={})
+    if latest.get("ok") is not True or latest.get("kind") != before["kind"]:
+        raise ValueError("缺少成功的最新 Git 验收，或最新核验失败")
+    from git_check import verify
+    verify(target, before["snapshot"])
+    return {".git/worktrees/" + tree["admin"] + "/gitdir" for tree in before["snapshot"]["linked"]}
+
+
+def check_current_manifest(root, manifest):
+    from tree_copy import changed_since
+    if sys.platform == "darwin":
         from mac_tree import snapshot
     else:
         from tree_copy import snapshot
-    from tree_copy import changed_since
-    for side,root in (("source",backup),("destination",target)):
-        current=snapshot(root,True)
-        with gzip.open(folder/(tag+"-"+side+".jsonl.gz"),"rt",encoding="utf-8") as saved:
-            for line in saved:
-                row=json.loads(line)
-                key=row.pop("path")
-                if current.get(key)!=row:
-                    return False,"文件已变化；请重新比较备份和目标"
-        if len(current)!=sum(cmp[side+"_summary"][k] for k in ("files","directories_including_root")):
-            return False,"文件清单已变化；请重新比较备份和目标"
-        if changed_since(current,snapshot(root,False)):
-            return False,"复核期间文件仍在变化"
-    return True,"本次已复验备份、目标和白名单内的时间差异；如继续编辑，请重新核验"
+    current = snapshot(root, True)
+    remaining = set(current)
+    with gzip.open(manifest, "rt", encoding="utf-8") as saved:
+        for line in saved:
+            row = json.loads(line)
+            path = row.pop("path")
+            if path not in remaining or current[path] != row:
+                raise ValueError("文件已变化；请重新比较备份和目标")
+            remaining.remove(path)
+    if remaining or changed_since(current, snapshot(root, False)):
+        raise ValueError("复核期间文件清单或文件内容发生变化")
+    return len(current)
 
 
-def notice(config, valid, reason):
-    old, new, backup = (config[k] for k in ("source","target","backup"))
-    kind="目录联接" if os.name=="nt" else "目录符号链接"
-    return dict(warning=f"⚠️ 请勿删除原位置下的原名文件夹：{old}（{kind}）。旧聊天通过它访问新地址；进入后删除内容会直接影响目标实体。",
-                target=new, target_message=f"正在使用的项目实体，必须保留：{new}", backup=backup, eligible=valid,
-                backup_message=(f"验收通过后可手动清理的实体备份：{backup}" if valid else
-                                f"⛔ 暂勿清理备份：{backup}")+"。"+reason)
+def cleanup_check(config, run, chat):
+    """Verify the final receipts and current contents before identifying any removable backup."""
+    from cutover import state
+    phase, old, target, backup = state(run / "cutover-plan.json")
+    paths = (str(old), str(target), str(backup))
+    if phase != "linked" or paths != (config["source"], config["target"], config["backup"]):
+        raise ValueError("旧路径、目标或备份身份未经确认")
+    if not chat or chat["status"] not in ("passed", "not_applicable"):
+        raise ValueError("旧会话核验尚有待处理项")
+    if chat["status"] == "passed":
+        read_probe(config, run, chat)
+
+    folder = run / "backup-check"
+    marker = max(folder.glob("*-started.json"), default=None)
+    if marker is None:
+        raise ValueError("缺少清理前的备份复核记录")
+    tag = marker.name.removesuffix("-started.json")
+    begun = read(marker)
+    comparison = read(folder / (tag + "-verify.json"))
+    expected = dict(action="verify", run=tag, source=str(backup), destination=str(target))
+    if any(record.get(key) != value for record in (begun, comparison) for key, value in expected.items()):
+        raise ValueError("最新复核的现场与本次备份不匹配")
+    diffs = comparison.get("differences")
+    if comparison.get("status") not in ("passed", "differences") or not isinstance(diffs, dict):
+        raise ValueError("最近一次备份核验未完成")
+    allowed_times = git_time_exceptions(run, old, target)
+    if chat["status"] == "passed":
+        allowed_times.add(".")
+    if (set(diffs) - {"mtime_ns"} or set(diffs.get("mtime_ns", [])) - allowed_times
+            or comparison.get("source_summary") != comparison.get("destination_summary")):
+        raise ValueError("备份有独有内容、两边存在差异或发生了未解释的变更")
+    for side, root in (("source", backup), ("destination", target)):
+        count = check_current_manifest(root, folder / (tag + "-" + side + ".jsonl.gz"))
+        summary = comparison[side + "_summary"]
+        if count != summary["files"] + summary["directories_including_root"]:
+            raise ValueError("文件清单条目数量不符")
+    return "本次已复验备份、目标和许可的时间差异；如继续编辑，请重新核验"
+
+
+def notice(config, eligible, reason):
+    old, new, backup = (config[k] for k in ("source", "target", "backup"))
+    kind = "目录联接" if os.name == "nt" else "目录符号链接"
+    backup_message = (f"验收通过后可手动清理的实体备份：{backup}" if eligible
+                      else f"⛔ 暂勿清理备份：{backup}")
+    return dict(warning=f"⚠️ 请勿删除原位置下的原名文件夹：{old}（{kind}）。删除入口会让旧路径失效；"
+                        "旧聊天通过它访问新地址，进入后删除内容会直接影响目标实体。",
+                target=new, target_message=f"正在使用的项目实体，必须保留：{new}",
+                backup=backup, eligible=eligible, backup_message=backup_message + "。" + reason)
 
 
 def record(args):
-    if args.command=="volumes":
-        print(json.dumps(volumes(absolute(args.source),absolute(args.target)),ensure_ascii=False))
+    if args.command == "volumes":
+        print(json.dumps(volumes(absolute(args.source), absolute(args.target)), ensure_ascii=False))
         return
-    run=absolute(args.run)
-    if args.command=="start": create_run(args,run)
-    if not run.is_dir() or run.resolve(strict=True)!=run:
+    run = absolute(args.run)
+    if args.command == "start":
+        create_run(args, run)
+    if not run.is_dir() or run.resolve(strict=True) != run:
         raise ValueError("Run directory must be physical.")
-    config=read(run/"run.json")
-    events=[read(p) for p in sorted(run.glob("event-*.json"))]
-    step=1
-    chat_status=None
-    finished=("passed","not_applicable","unverified")
-    for e in events:
-        if e["status"]=="reopened":
-            step=e["step"]
-            if step<=6: chat_status=None
-        elif e["status"] in finished:
-            if e["step"]==6: chat_status=e["status"]
-            step+=1
-    eligible,reason=False,"核验未完成"
-    if (step>7 and args.command=="show") or (step==7 and args.command=="mark" and args.status=="passed"):
-        from cutover import MigrationError
-        try: eligible,reason=cleanup_check(config,run,chat_status)
-        except (ValueError,KeyError,OSError,RuntimeError,TypeError,MigrationError) as exc: reason=str(exc)
-    rejected=False
-    if args.command in ("mark","reopen"):
-        if args.command=="reopen":
-            if not 1<=args.step<step: raise ValueError("Only a completed stage can be reopened.")
-            step=args.step
-        elif step!=args.step or not 1<=step<=7: raise ValueError(f"Expected step {step}.")
-        if args.status in ("not_applicable","unverified") and step!=6:
+    config = read(run / "run.json")
+    events = [read(p) for p in sorted(run.glob("event-*.json"))]
+    step, chat, pending = current_progress(events)
+    eligible = False
+    reason = "核验未完成"
+    marking_final = step == 7 and args.command == "mark" and args.status == "passed"
+    if marking_final or (step > 7 and args.command == "show"):
+        try:
+            reason = cleanup_check(config, run, chat)
+            eligible = True
+        except (OSError, ValueError, KeyError, RuntimeError, TypeError, MigrationError) as exc:
+            reason = str(exc)
+
+    rejected = False
+    if args.command in ("mark", "reopen"):
+        if args.command == "reopen":
+            if not 1 <= args.step < step:
+                raise ValueError("Only a completed stage can be reopened.")
+            step = args.step
+        elif step != args.step or not 1 <= step <= 7:
+            raise ValueError(f"Expected step {step}.")
+        if args.status in ("not_applicable", "unverified") and step != 6:
             raise ValueError("A chat coverage decision is only applicable at step 6.")
         if not args.evidence.strip() or not args.next_action.strip():
             raise ValueError("Provide an evidence reference and the next action.")
-        if step==7 and args.status=="passed" and not eligible:
-            args.status="blocked"
-            rejected=True
-        ev=dict(step=step,status=args.status,evidence=args.evidence,next_action=args.next_action,recorded=timestamp())
-        if rejected: ev["verification_error"]=reason
-        store_new(run/f"event-{len(events)+1:06}.json",ev)
-        events.append(ev)
-        if args.status in finished: step+=1
-    print(json.dumps(dict(cleanup_notice=notice(config,eligible,reason),run=str(run),config=config,
-                          next_step=step if step<=7 else None,last_event=events[-1] if events else None),ensure_ascii=False))
-    if rejected: raise SystemExit(2)
+        event = dict(step=step, status=args.status, evidence=args.evidence,
+                     next_action=args.next_action, recorded=timestamp())
+        if step == 6 and args.status in ("waiting", "passed"):
+            event.update(bind_probe(args, config, run, pending, events))
+        elif getattr(args, "request_id", None) is not None or getattr(args, "session_id", None) is not None:
+            raise ValueError("A session binding applies only to step 6 waiting or passed.")
+        if marking_final and not eligible:
+            event.update(status="blocked", verification_error=reason)
+            rejected = True
+        save_exclusive(run / f"event-{len(events) + 1:06}.json", event)
+        events.append(event)
+        if event["status"] in FINISHED:
+            step += 1
+
+    result = dict(cleanup_notice=notice(config, eligible, reason), run=str(run), config=config,
+                  next_step=step if step <= 7 else None, last_event=events[-1] if events else None)
+    print(json.dumps(result, ensure_ascii=False))
+    if rejected:
+        raise SystemExit(2)
 
 
 def main():
-    if os.name!="nt" and sys.platform!="darwin": raise SystemExit("Requires native Windows or macOS.")
-    parser=argparse.ArgumentParser(description=__doc__)
-    subs=parser.add_subparsers(dest="command",required=True)
-    start=subs.add_parser("start")
-    preview=subs.add_parser("volumes")
-    for cmd in (start,preview):
-        cmd.add_argument("source"); cmd.add_argument("target")
+    if sys.platform not in ("win32", "darwin"):
+        raise SystemExit("Requires native Windows or macOS.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    start = commands.add_parser("start")
+    preview = commands.add_parser("volumes")
+    for command in (start, preview):
+        command.add_argument("source")
+        command.add_argument("target")
     start.add_argument("--project-id")
-    start.add_argument("--host",choices=("codex","claude-code","generic"),default="codex")
-    start.add_argument("--allow-same-volume",action="store_true")
-    show=subs.add_parser("show")
-    mark=subs.add_parser("mark")
-    reopen=subs.add_parser("reopen");reopen.set_defaults(status="reopened")
-    for cmd in (start,show,mark,reopen): cmd.add_argument("--run",required=True)
-    mark.add_argument("--status",choices=("waiting","blocked","passed","not_applicable","unverified"),required=True)
-    for cmd in (mark,reopen):
-        cmd.add_argument("--step",type=int,required=True)
-        cmd.add_argument("--evidence",required=True)
-        cmd.add_argument("--next-action",required=True)
-    try: record(parser.parse_args())
-    except (OSError,ValueError,KeyError,TypeError) as exc: parser.exit(1,f"Migration checkpoint: {exc}\n")
+    start.add_argument("--host", choices=("codex", "claude-code", "generic"), default="codex")
+    start.add_argument("--allow-same-volume", action="store_true")
+    show = commands.add_parser("show")
+    mark = commands.add_parser("mark")
+    reopen = commands.add_parser("reopen")
+    reopen.set_defaults(status="reopened")
+    for command in (start, show, mark, reopen):
+        command.add_argument("--run", required=True)
+    mark.add_argument("--status", choices=("waiting", "blocked", "passed", "not_applicable", "unverified"),
+                      required=True)
+    mark.add_argument("--request-id", type=UUID)
+    mark.add_argument("--session-id")
+    for command in (mark, reopen):
+        command.add_argument("--step", type=int, required=True)
+        command.add_argument("--evidence", required=True)
+        command.add_argument("--next-action", required=True)
+    try:
+        record(parser.parse_args())
+    except (OSError, ValueError, KeyError, TypeError, MigrationError) as exc:
+        parser.exit(1, f"Migration checkpoint: {exc}\n")
 
 
-if __name__=="__main__":
-    if hasattr(sys.stdout,"reconfigure"):
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
     main()

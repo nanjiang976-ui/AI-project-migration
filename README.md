@@ -1,118 +1,133 @@
-# Codex 项目迁移助手
+# AI 项目迁移助手
 
-[English](README.en.md) · [快速安装](#install) · [第一次使用](#first-run) · [常见问题](#faq)
+[English](README.en.md) · [快速安装](#install) · [第一次使用](#first-run) · [兼容性](#compatibility) · [常见问题](#faq)
 
-把 Windows 上的 Codex 本地项目从 C 盘迁到 D 盘，让新聊天使用新位置，也让原先在项目主目录工作的旧聊天继续读写同一份文件。助手会逐步说明谁来操作、怎样确认成功，以及什么时候可以删除旧备份。
+把本地 AI 项目从这台电脑的一个存储卷搬到另一个卷。助手先复制并核对项目，再在原名位置留下一个链接，让仍使用旧路径的聊天可以访问新文件。它会逐步说明你需要做什么、验证了什么，以及哪份备份可以手动清理。
+
+**例如**，Windows 可以从 `E:\Projects\Demo` 迁到 `F:\Work\Demo`，Mac 可以从 `/Users/example/Projects/Demo` 迁到 `/Volumes/Work/Projects/Demo`。实际路径由你选定。安装文件夹名和 Codex 调用名仍为 `codex-project-migration`，已安装旧版的用户可在同一位置更新。
 
 ## 我什么时候需要它？
 
-- **C 盘空间不足。** 想把整个项目迁到另一块本地磁盘，希望连同隐藏文件、空目录和未提交的素材一起保留。
-- **还有旧聊天要接着用。** 在 Codex 里改了项目源文件夹后，旧聊天可能仍记着原路径。这个 Skill 会在原位置建立 Windows **目录联接**，让旧地址通向新目录。
-- **项目有未提交改动或 Git 工作树。** 工作树是同一仓库的独立工作副本。助手会记录这些副本的状态，迁移后核对它们与主仓库的连接。普通文件夹也可以用。
+- **存放项目的卷快满了。** 复制范围包括隐藏文件、空目录、未提交的素材和本地工具目录。把两个目录放在同一个卷内只会改变位置，无法给该卷腾出空间；助手检查卷身份后会请你确认是否仍要继续。
+- **以前的聊天还需要修改项目。** Windows 用目录联接，macOS 用目录符号链接，把旧地址连接到新位置。最终会分别检查原会话的恢复、默认工作目录的实际读写以及旧入口本身。
+- **项目还有 Git 工作树。** 工作树是同一仓库的独立工作副本。助手记录它们的提交和未提交状态，迁移后再核对连接；普通文件夹也适用。
 
-### 开始前确认环境
+<a id="compatibility"></a>
 
-需要 Windows 上的 Codex 桌面应用、**本地 NTFS** 源盘和目标盘、**CPython 3.12 或更高版本**，以及 Windows PowerShell 5.1 或 PowerShell 7。Git 项目另需 Git。目标盘要有足够空间容纳完整项目。可在文件资源管理器中打开磁盘“属性”查看文件系统和剩余空间。
+## 兼容性和实测范围
 
-在 PowerShell 输入 `python --version` 可查看 Python 版本。Git 项目还可输入 `git --version`。先保存打开的文件，暂停会继续写入项目的任务。准备一个**尚未被占用的目标文件夹名**，例如 `D:\CodexProjects\Demo`，并让助手创建它。
+下表中，“文件迁移”指本地文件系统与 Git 测试；“旧会话”单独核验原会话身份和双向读写。下面的结果用于选择工具，你自己的项目仍有单独的验收单。
+
+| 执行环境 | 文件迁移 | 旧会话与使用方式 |
+|---|---|---|
+| Windows · Codex | 本地 NTFS 跨卷已实测 | 原 Codex 主目录旧聊天已有真实读写验收；可读取项目历史，桌面工具缺失时由用户配合 |
+| Windows · Claude Code | 使用相同的已测 NTFS 文件流程 | Claude Code 2.1.150 已在虚构项目中恢复同一真实测试会话，并从其默认目录及旧入口完成双向读写；新会话从目标目录启动也已验证 |
+| Windows · 其他本地 Agent | 使用相同的已测 NTFS 文件流程 | 手动选路径、从新位置打开项目并在原聊天中测试；结果按宿主实际能力记录 |
+| macOS · Codex | 两个 APFS 测试卷已在原生 macOS CI 验证 | macOS 上的真实 Codex 旧聊天需在宿主核验 |
+| macOS · Claude Code | 两个 APFS 测试卷已在原生 macOS CI 验证 | 提供 Claude Code 安装和恢复流程；macOS 上的真实 Claude 旧会话尚未实测 |
+| macOS · 其他本地 Agent | 两个 APFS 测试卷已在原生 macOS CI 验证 | 通用引导；需要能够在本机运行命令，旧聊天手动核验 |
+
+Windows 跨卷测试使用同一块 SSD 的不同 NTFS 分区。macOS 原生 CI 使用两个独立挂载的 APFS 镜像卷；镜像测试覆盖文件、元数据、工作树、符号链接和读写。[查看原生验收记录](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/actions/runs/44454723501)。两块独立物理硬盘、Linux、网络共享、跨电脑及换系统迁移均未纳入这份实测记录。[开发测试](tests/) · [macOS 原生测试工作流](.github/workflows/macos-apfs.yml)
+
+**谁来搬、谁保存着聊天？** 例如，Claude Code 可以帮助复制一个含 Codex 聊天的项目，但那些聊天仍须在 Codex 中验证。没有批量历史接口时会标明“历史未能批量核验”；一份文件复制成功报告只证明文件方面的结果。[各宿主的操作与验收](skills/codex-project-migration/references/hosts.md)
+
+### 开始前准备
+
+- **Windows**：源卷和目标卷均为已连接的本地 NTFS，安装 CPython 3.12+、Windows PowerShell 5.1 或 PowerShell 7。可在 PowerShell 输入 `python --version` 查看 Python 版本。
+- **macOS**：选择本机已挂载、可写且启用了所有权的 APFS 源卷和目标卷，准备 CPython 3.12+ 和终端。用 `python3 --version` 查看版本，外接卷在迁移及后续使用项目时都要保持可用。
+- Git 项目另需 Git（`git --version`）。保存文件、暂停会改写项目的任务，为完整副本预留空间。给出尚未占用的目标项目路径，让助手创建它。
 
 <a id="install"></a>
 
 ## 快速安装
 
-1. 在本仓库点 **Code → Download ZIP**，或使用[主分支 ZIP 下载](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/archive/refs/heads/main.zip)。
-2. 在资源管理器里右键 ZIP，选择 **全部解压缩**。打开解压后的仓库，进入 `skills`，找到 **`codex-project-migration`**。打开它能直接看到 `SKILL.md`、`agents`、`references` 和 `scripts`。
-3. 复制整个 **`codex-project-migration`** 文件夹。在资源管理器地址栏输入 `%USERPROFILE%\.agents\skills` 并回车，将文件夹粘贴进去。如果这个位置尚不存在，可先打开 `%USERPROFILE%`，依次创建 `.agents` 和其中的 `skills`。
-4. 核对下面这条路径能打开文件，然后重开 Codex。
+1. 点 **Code → Download ZIP** 或[下载 main 分支 ZIP](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/archive/refs/heads/main.zip)。Windows 右键选择“全部解压缩”；macOS 可在访达中双击解压。
+2. 找到解压后的 `skills/codex-project-migration`。复制这个完整文件夹，打开它应该直接看到 `SKILL.md`、`agents`、`references` 和 `scripts`。
+3. 按使用的 Agent 选择个人安装目录。若目录不存在，可以先创建。安装位置应在待迁移的项目之外。
 
-```text
-%USERPROFILE%\.agents\skills\codex-project-migration\SKILL.md
-```
+| 使用者 | Windows 目标文件夹 | macOS 目标文件夹 |
+|---|---|---|
+| Codex | `%USERPROFILE%\.agents\skills\codex-project-migration` | `~/.agents/skills/codex-project-migration` |
+| Claude Code 本地 CLI | `%USERPROFILE%\.claude\skills\codex-project-migration` | `~/.claude/skills/codex-project-migration` |
+| 其他可执行本地命令的 Agent | 使用宿主支持的个人 Skill 目录，或放在固定工具目录 | 同左；向助手提供 `SKILL.md` 的完整路径 |
 
-若你的环境已使用 `%USERPROFILE%\.codex\skills` 并能识别那里的个人 Skill，也可以把同一个文件夹安装到那里。两处选一处。把 Skill 放在用户目录，可以在待迁移项目改名、Codex 退出期间继续运行它提供的命令。[Codex 官方 Skill 目录说明](https://learn.chatgpt.com/docs/build-skills)
+4. 确认目标文件夹中直接有 `SKILL.md`，然后重开所用的本地 Agent。例如 Codex 在 Windows 的入口是 `%USERPROFILE%\.agents\skills\codex-project-migration\SKILL.md`。已经使用 `.codex/skills` 并能识别它的 Codex 环境可沿用该位置，同一宿主只选一处。[Codex Skill 目录](https://learn.chatgpt.com/docs/build-skills) · [Claude Code Skills](https://code.claude.com/docs/en/skills)
 
 <a id="first-run"></a>
 
 ## 第一次使用
 
-先在 Codex 聊天中粘贴这条提示词。
+**Codex** 中粘贴：
 
 ```text
-$codex-project-migration 帮我迁移一个项目。
+$codex-project-migration 帮我迁移一个本地项目。
 ```
 
-预期第一句是 **“你要迁移哪个 Codex 项目？”** 选定后，助手会展示原路径、目标路径、七个步骤以及每一步的分工。先核对路径，尤其留意同名项目。
-
-要指定项目名，可以使用下面的示例。
+**Claude Code 本地 CLI** 中输入：
 
 ```text
-$codex-project-migration 我想把本地项目 Demo 迁到 D:\CodexProjects\Demo。请先给我看原路径、目标路径和完整步骤。
+/codex-project-migration 帮我迁移一个本地项目。
 ```
+
+如果使用其他 Agent，让它读取安装好的 `SKILL.md` 并按照七步流程引导你。没有指定项目时，助手会先问 **“你要迁移哪个本地项目？”**。也可以直接说：“我想把 Demo 迁到另一块盘，旧聊天在 Claude Code。请先让我核对两个完整路径和七步分工。” 请核对同名项目和卷名后再开始。
 
 ## 迁移时，我要做什么？
 
 | 步骤 | 助手做什么 | 你做什么 | 成功标志 |
 |---|---|---|---|
-| 1. 核对项目 | 记录项目身份、原路径、聊天和工作树，检查空间 | 确认项目与目标，保存文件并暂停编辑 | 能列出本次要保留和检查的对象 |
-| 2. 复制 | 复制完整项目，保留原件 | 正常情况无需操作 | 目标副本已创建，有本次复制记录 |
-| 3. 核验副本 | 逐文件计算 SHA-256，检查目录、文件属性、权限、硬链接和 NTFS 命名数据流 | 如果项目仍有写入，暂停并让助手复核 | 源与副本通过严格比较。差异得到处理 |
-| 4. 切换原项目 | 在同一个 Codex 项目里更新主目录，回读设置，按需修复工作树连接 | 能代操作时无需操作。否则按提示点击并核对路径 | 原项目 ID 保留，新的主目录指向目标盘 |
-| 5. 保留旧路径 | 给出与你选择相符的一段 PowerShell 命令 | **退出前选 A 或 B**，完全退出 Codex（含托盘后台），从开始菜单打开独立 PowerShell，运行所给命令 | `LinkType` 为 `Junction`，`Target` 是本次新路径 |
-| 6. 测试旧聊天 | 核对联接后，在一个符合条件的旧聊天里验证双向读写 | **重开后选 A 或 B**，见下方 | 从旧聊天默认目录和新目录读到同一测试文件，测试后已清理 |
-| 7. 收尾 | 分别复核聊天、Git 工作树、原盘备份，列出待处理项及完整路径 | 验收后，自行决定何时手动删除实体备份 | 备份里没有尚待保全的内容，原名联接继续可用 |
+| 1. 核对项目 | 确认宿主、两端路径与卷身份，记录聊天和工作树基准 | 选项目与目标，保存文件，暂停写入 | 路径、容量、基准与可核验范围明确 |
+| 2. 复制 | 完整复制并保留源实体 | 正常无需操作 | 有目标副本和本次复制记录 |
+| 3. 核验副本 | 逐文件 SHA-256，核对目录、权限、硬链接及平台元数据 | 源还在变化时暂停写入 | 严格比较通过 |
+| 4. 从新位置打开 | Codex 在原项目换源；CLI 或通用 Agent 核对新会话的默认目录；按需重连工作树 | 按所属宿主打开或确认 | 目标实体确实用于新工作，原项目/工作树对应关系可核对 |
+| 5. 保留旧路径 | 根据选项给出一段填好真实路径的命令 | **退出前选 A/B**，退出占用程序，从项目外打开独立 PowerShell 或 Mac 终端操作 | 原名为正确链接，备份仍是原实体 |
+| 6. 验证旧聊天 | 核对链接、原会话身份和实际双向读写 | **重开且链接通过后选 A/B**，使用迁移前已有的一条旧聊天 | 目标文件与旧入口访问同一对象，临时文件已清理 |
+| 7. 最终复核 | 分别列出聊天、工作树、源盘备份及三条准确路径 | 验收后自行决定是否手动清理备份 | 所有差异已解释，旧入口继续保留 |
 
-**第 5 步，选择怎么改名。** A 是你在资源管理器里手动改名，随后命令只建联接并检查。B 是让命令完成改名、建联接和检查。两种方式都会在退出 Codex **之前**给到你填好真实路径的命令。可先存到记事本，退出后粘贴运行。重开 Codex 后告诉助手“联接已建立”，它会检查现场并接着走。
+**第 5 步的两个选项**：A 是你在资源管理器或访达中手动改名，再粘贴命令建立链接；B 是命令完成改名、建立链接和检查。退出前将所选命令存到文本编辑器。Windows 结果会显示 `Junction`，macOS 显示 `SymbolicLink`，`Target` 应为准确的目标项目路径。重开后告诉助手“联接已建立”。
 
-**第 6 步，选择怎么测试旧聊天。** A 是你把提示词贴进选定的旧主目录聊天，回来告诉助手测试结果。B 是让 Codex 自动验证。如果当前聊天符合条件，就在当前聊天里测。需要换一条旧聊天时，只有你选定它并明确同意发送后，助手才会代发一条可见的测试消息。桌面工具的可用性决定哪些点击、历史查询或消息发送能自动完成，缺少接口时助手会引导手动操作，并说明实际核验范围。
+**第 6 步的两个选项**：A 是你把提示词贴进原项目的旧聊天并回报结果；B 是由助手验证当前符合条件的旧聊天。跨聊天代发仅在所属宿主具备该能力、你选定旧聊天并明确授权后使用；否则由你手动转交。Claude Code 先尝试 `claude --resume <原会话ID>`。Windows 实测中，2.1.150 换根后仅凭 ID 没有找到原记录；用 `claude --resume <原会话.jsonl的绝对路径>` 恢复后，宿主返回同一 ID、记得原会话专有的测试标记，并从默认目标目录通过探针验证了旧入口和目标实体。这个测试也单独确认了 `/codex-project-migration` 能在隔离项目启动并询问项目名。无需上传或改写聊天记录。[宿主操作与证据](skills/codex-project-migration/references/hosts.md) ·[Claude Code 会话恢复](https://code.claude.com/docs/en/cli-reference)
 
 ## 迁完以后，哪个文件夹可以删？
 
-下面是虚构项目 `Demo` 的一个例子。目录联接保留旧地址，项目文件由 D 盘那一份提供。
+> [!CAUTION]
+> **⚠️ 请勿删除原位置下的原名文件夹。** Windows 的这个入口是目录联接，macOS 上是目录符号链接。旧聊天依靠它找到新地址。删除入口会使旧路径失效；**进入其中删除文件，会直接影响目标盘上的项目文件。**
+
+以下为虚构的 `Demo` 示例。最终报告会把对应的三条完整路径写给你。
 
 ```text
-迁移前
-C:\Projects\Demo              原项目实体
+Windows
+E:\Projects\Demo                    原名目录联接 → F:\Work\Demo           必须保留
+F:\Work\Demo                         目标项目实体                          必须保留
+E:\Projects\Demo_迁移备份             源盘实体备份                          验收通过后可手动清理
 
-迁移后
-D:\CodexProjects\Demo         正在使用的项目实体           保留
-C:\Projects\Demo              目录联接 → D:\CodexProjects\Demo  保留
-C:\Projects\Demo_迁移备份     迁移前的原件                 验收后可手动删除
+macOS
+/Users/example/Projects/Demo         原名符号链接 → /Volumes/Work/Projects/Demo   必须保留
+/Volumes/Work/Projects/Demo          目标项目实体                                必须保留
+/Users/example/Projects/Demo_迁移备份  源盘实体备份                                验收通过后可手动清理
 ```
 
-**进入 `C:\Projects\Demo` 删除里面的文件，会直接删除 D 盘的项目文件。** 要释放原盘空间，请按最终报告给出的完整路径操作，只清理经过核验的 `Demo_迁移备份`。助手会把清理决定留给你。
+**⛔ 暂勿清理备份**：有源盘独有文件、内容差异未解释，或有关核验尚未完成时，保留备份。助手不会替你批量删除文件夹。
 
-## 怎样知道迁移真的成功？
+## 怎样知道真的成功？
 
-下表是一份**虚构的验收单**。每一行记录一项单独验证过的结果。
-
-| 检查 | 示例结果 | 说明 |
-|---|---|---|
-| 项目文件 | 120 个文件，SHA-256 全部相符 | 副本完整性做了逐文件检查 |
-| 聊天历史 | 4/4 条按原 ID 读到历史回合 | 这 4 条的历史可读 |
-| 旧聊天写入 | 1 条主目录旧聊天实测通过 | 在其默认目录创建随机文件，从 D 盘读取并核对文件身份，再从 D 盘追加并通过旧路径读回。测试文件已清理 |
-| Git 工作树 | 1/1 个关联正确 | 当前提交、分支和未提交状态与基准匹配 |
-| 原盘备份 | 独有文件 0，未解释的内容差异 0 | 可以按报告中的路径手动清理备份 |
-
-历史读取数量和实际读写数量会分开列出。没有适合自测的旧主目录聊天时，报告说明原因并记录实际测试数。随附的[测试与验证](tests/)面向开发者。普通用户安装后可直接在聊天里使用。隔离演练实际运行 Windows 文件系统、PowerShell 和 Git。桌面点击和跨聊天消息流程的演练使用模拟结果。每次真实迁移仍以本机这一次的验收单为准。
+一份**虚构验收单**可以是：120 个文件的 SHA-256 均匹配；有接口可读的 4/4 条旧聊天成功打开；其中 1 条按原 ID 恢复，并从默认目录和新位置对同一文件完成双向读写；1/1 个 Git 工作树连接和改动清单匹配；备份独有文件和未解释的差异均为 0。报告将历史可读数量与真正写过测试文件的旧聊天数量分开列出。macOS 或已重绑的宿主可能显示解析后的目标路径；原会话身份、实际默认目录和旧链接仍分别检查。
 
 <a id="faq"></a>
 
 ## 常见问题
 
-**改名时报“文件夹正在使用”怎么办？** 保存文件并关闭占用它的程序。经常是 Codex 或以项目为当前目录的终端仍在运行。完全退出 Codex 和托盘后台，从项目外打开独立 PowerShell，再使用本次的命令接续。如果仍报错，保留原件，告诉助手错误发生在哪一步。
+**原目录提示“正在使用”？** 保存文件、退出相关 Agent（Windows 桌面应用也要退出托盘后台），关闭以项目为当前目录的终端，然后从项目外运行已准备的命令。如果仍被占用，保留现场并告诉助手具体报错。
 
-**旧聊天里为什么还显示 C 盘？** 它记住了迁移前的地址。Windows 会沿联接访问 D 盘。第 6 步通过真实写入和读回来验证这一点。
+**外接卷未挂载或目标卷变化了？** 重新挂载并核对卷身份与目标位置。不要在消失的挂载点目录里创建一个临时替代项目；助手会暂停切换。
 
-**`.migration-checks` 有什么用？** 它在本机保存运行记录、文件清单和恢复所需的检查点。默认放在目标父目录。做完验收前保留本次运行目录。其中可能包含本地路径和聊天 ID，分享问题时请先脱敏。
+**中断后怎样继续？`.migration-checks` 是什么？** 保留两端目录和本机审计目录，重新打开后说“继续上次迁移”。检查点、文件清单和本次证据用于核实实际状态。审计目录可能含本地路径、会话 ID；反馈问题时先脱敏。
 
-**做到一半退出了怎么办？** 重新打开 Codex，告诉助手“继续上次迁移”。保留两边文件和运行记录。助手会核对已完成步骤。看到已有正确联接时会验证后继续。
+**为什么工作树仍在旧卷？** 独立工作副本可以保留原位置和各自未提交的内容。助手会核对它们指向新主仓库；工作树聊天继续编辑对应的独立副本。
 
-**Git 工作树怎么还在 C 盘？** 迁移的是主项目。原来独立的工作副本可以留在原位置，仍持有各自的未提交改动，助手会检查它们是否已关联到新的主仓库。工作树聊天继续使用对应工作副本。
-
-**为什么对某些文件会暂停？** 云占位文件、加密、压缩或稀疏文件、指向项目外的硬链接、树内已有的联接等都需要单独判断。助手会说明哪项超出支持范围，并保留原件。更多技术细节见[执行与接续手册](skills/codex-project-migration/references/operations.md)和[聊天验收说明](skills/codex-project-migration/references/chats.md)。
+**有些文件为什么会暂停？** 源卷和目标卷均须使用支持的本地文件系统。无法核验的权限、云占位、依赖树外对象的链接等需要另行处理。macOS 还要核对 ACL、扩展属性（含资源分支）、文件标志和名称碰撞。助手保留原件并说明具体原因。更多细节见[复制与接续](skills/codex-project-migration/references/operations.md)和[聊天验收](skills/codex-project-migration/references/chats.md)。
 
 ## 反馈与许可
 
-提交问题时，请附上 Windows、Python 和 PowerShell 版本、具体步骤和**脱敏后的错误描述**。用 `C:\Projects\Demo` 一类示例替换真实路径，聊天正文、聊天 ID、完整文件清单和迁移报告请留在本机。[提交 Issue](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/issues)
+提 Issue 时附操作系统、Agent、Python 版本、失败步骤与脱敏后的错误描述。使用虚构的路径或项目名，聊天正文、真实会话 ID、完整文件清单和迁移报告请留在本机。[提交 Issue](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/issues)
 
-本项目采用 [MIT 许可证](LICENSE)。
+本项目使用 [MIT 许可证](LICENSE)。

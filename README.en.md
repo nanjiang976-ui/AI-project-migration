@@ -1,118 +1,133 @@
-# Codex Project Migration Assistant
+# AI Project Migration Assistant
 
-[简体中文](README.md) · [Install](#install) · [First run](#first-run) · [FAQ](#faq)
+[简体中文](README.md) · [Install](#install) · [First run](#first-run) · [Compatibility](#compatibility) · [FAQ](#faq)
 
-Move a local Codex project from C: to D: on Windows. New chats can start in the new location, and existing chats that used the main project folder can keep working on the same files. The assistant walks you through the move, shows what it verified, and identifies the backup you can remove to reclaim space.
+Move a local AI project between storage volumes on the same computer. The assistant copies and verifies the project, then leaves a link at its original name so existing chats that still use the old address can reach the new files. Each step explains what you need to do, what has been verified and when you can remove the backup.
+
+**For example**, a Windows project might move from `E:\Projects\Demo` to `F:\Work\Demo`, or a Mac project from `/Users/example/Projects/Demo` to `/Volumes/Work/Projects/Demo`. You choose the actual paths. The installation folder and Codex invocation name remain `codex-project-migration`, so existing users can update in place.
 
 ## When would I use this?
 
-- **C: is running low on space.** Move a complete project, including hidden files, empty folders and uncommitted work, to another local drive.
-- **You want to continue an old chat.** An existing chat may still remember the old working directory after you change the project's primary folder in Codex. A Windows **directory junction** lets the old address open the new folder.
-- **Your project has uncommitted changes or Git worktrees.** A worktree is a separate working copy of the same repository. The assistant records each worktree's state and checks its connection to the main repository after the move. Ordinary folders are supported too.
+- **Your project volume is running low on space.** The copy includes hidden files, empty folders, uncommitted materials and local tools. A move within the same volume only changes a folder's location: it won't reclaim space on that volume. The assistant checks the volume identities and asks whether you still want to proceed.
+- **You want existing chats to keep editing the project.** A directory junction on Windows or a directory symbolic link on macOS connects the original address to the destination. Acceptance checks distinguish recovery of the original session, actual reads and writes from its default working directory, and access through the old link.
+- **The project has Git worktrees.** A worktree is a separate working copy of the same repository. The assistant records its commit and uncommitted state and checks its connection afterward. Ordinary non-Git folders can also be moved.
+
+<a id="compatibility"></a>
+
+## Compatibility and verification
+
+“File migration” refers to local filesystem and Git checks. “Existing session” is separately verified by matching the original session identity and reading and writing from its default directory. Use the table to choose a workflow; every real migration gets its own acceptance report.
+
+| Environment | File migration | Existing sessions and workflow |
+|---|---|---|
+| Windows · Codex | Tested across local NTFS volumes | A real existing Codex chat using the main project folder has passed a read/write check. History can be inspected where the desktop integration is available; the user assists otherwise. |
+| Windows · Claude Code | Uses the same tested NTFS file workflow | Claude Code 2.1.150 restored the same real test session in a fictional project and verified bidirectional reads and writes through its default directory and old link. A new session also started in the destination. |
+| Windows · Other local agents | Uses the same tested NTFS file workflow | Choose paths, open the destination and test the original chat manually; coverage depends on the host. |
+| macOS · Codex | Two APFS test volumes verified in native macOS CI | A real existing Codex chat still requires host-side verification on macOS. |
+| macOS · Claude Code | Two APFS test volumes verified in native macOS CI | Installation and resume instructions are provided. A real existing Claude session has not been verified on macOS. |
+| macOS · Other local agents | Two APFS test volumes verified in native macOS CI | Guided manual workflow for agents that can execute local commands. Test an existing chat manually. |
+
+The Windows cross-volume test used different NTFS partitions on the same SSD. Native macOS CI used two separately mounted APFS disk images to verify file contents and metadata, Git worktrees, symbolic links, and reads and writes. [Native acceptance run](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/actions/runs/44454723501). Two separate physical drives, Linux, network shares, moves to another computer and OS changes are outside this test record. [Developer tests](tests/) · [Native macOS workflow](.github/workflows/macos-apfs.yml)
+
+**Which agent performs the move, and which one owns the chat?** For instance, Claude Code can help copy a project used by Codex, while recovery of its Codex chats must be verified in Codex. If the host cannot list histories, the report marks bulk history verification as unavailable. A successful file copy proves only the file portion of the move. [Host-specific operations and evidence](skills/codex-project-migration/references/hosts.md)
 
 ### Before you start
 
-Use the Codex desktop app on Windows with **local NTFS** source and destination drives, **CPython 3.12 or later**, and Windows PowerShell 5.1 or PowerShell 7. Git projects also need Git. Allow enough space on the destination drive for the complete project. To see a drive's file system and available space, open its **Properties** in File Explorer.
-
-In PowerShell, `python --version` displays your Python version. For a Git project, `git --version` confirms Git is available. Save open files and pause tasks that may write to the project. Choose an **unused destination folder name**, for example `D:\CodexProjects\Demo`, and let the assistant create it.
+- **Windows:** Both volumes must be local NTFS. You need CPython 3.12+ and Windows PowerShell 5.1 or PowerShell 7. Check Python with `python --version`.
+- **macOS:** Use mounted, writable local APFS volumes with ownership enabled, CPython 3.12+ and Terminal. Check with `python3 --version`. An external destination must also be available whenever you use the migrated project.
+- Git projects additionally require Git (`git --version`). Save open files, pause tasks that may write and allow enough space for a full copy. Choose an unused destination project path so the assistant can create it.
 
 <a id="install"></a>
 
 ## Install from a ZIP
 
-1. On this repository's GitHub page, choose **Code → Download ZIP**, or use the [direct ZIP download for the main branch](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/archive/refs/heads/main.zip).
-2. Right-click the ZIP in File Explorer and select **Extract All**. In the extracted repository, open `skills` and find **`codex-project-migration`**. Open it once to check that it directly contains `SKILL.md`, `agents`, `references` and `scripts`.
-3. Copy the entire **`codex-project-migration`** folder. Paste `%USERPROFILE%\.agents\skills` into File Explorer's address bar, press Enter and paste the folder there. If this location does not exist, open `%USERPROFILE%` and create `.agents` and its `skills` subfolder.
-4. Check that the following file opens, then restart Codex.
+1. Select **Code → Download ZIP**, or use the [main branch ZIP](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/archive/refs/heads/main.zip). In Windows, right-click the archive and select **Extract All**. In Finder, double-click it to extract.
+2. Open `skills/codex-project-migration` inside the extracted repository. Copy that entire folder. Its direct contents include `SKILL.md`, `agents`, `references` and `scripts`.
+3. Choose a personal installation location for the agent you will use. Create the parent directory if needed. Install outside the project being moved.
 
-```text
-%USERPROFILE%\.agents\skills\codex-project-migration\SKILL.md
-```
+| Host | Windows destination folder | macOS destination folder |
+|---|---|---|
+| Codex | `%USERPROFILE%\.agents\skills\codex-project-migration` | `~/.agents/skills/codex-project-migration` |
+| Claude Code local CLI | `%USERPROFILE%\.claude\skills\codex-project-migration` | `~/.claude/skills/codex-project-migration` |
+| Other agents with local command access | The host's personal skills directory, or a stable local tools directory | Use the same approach and give the agent the full path to `SKILL.md` |
 
-If your setup already discovers personal skills in `%USERPROFILE%\.codex\skills`, you can install the same folder there instead. Choose a single location. A user-level install keeps the assistant's commands available while Codex is closed and your project folder is being renamed. [Codex skill locations](https://learn.chatgpt.com/docs/build-skills)
+4. Check that the installed folder directly contains `SKILL.md`, then restart your local agent. For example, the Codex entry point on Windows is `%USERPROFILE%\.agents\skills\codex-project-migration\SKILL.md`. Codex environments that already discover personal skills in `.codex/skills` can keep using that location. Choose one installation location per host. [Codex skill locations](https://learn.chatgpt.com/docs/build-skills) · [Claude Code Skills](https://code.claude.com/docs/en/skills)
 
 <a id="first-run"></a>
 
 ## First run
 
-Paste this into a Codex chat:
+**In Codex**, paste:
 
 ```text
-$codex-project-migration Help me move a local Codex project. Please guide me in English.
+$codex-project-migration Help me move a local project. Please guide me in English.
 ```
 
-The assistant starts by asking **“Which Codex project do you want to migrate?”** (in Chinese, **“你要迁移哪个 Codex 项目？”**). Once you choose one, it shows the original path, the proposed destination, all seven steps and who handles each one. Check both paths, especially if multiple projects have the same name.
-
-You can also name a project up front:
+**In the Claude Code local CLI**, enter:
 
 ```text
-$codex-project-migration I want to move my local Demo project to D:\CodexProjects\Demo. First show me the current path, the destination and the full procedure.
+/codex-project-migration Help me move a local project. Please guide me in English.
 ```
+
+In another local agent, ask it to read the installed `SKILL.md` and guide you through the seven steps. If you haven't named the project, the first question is **“Which local project do you want to migrate?”** You can also start with “Move my Demo project to another drive. Its existing chats are in Claude Code. First show me the two full paths and who handles each step.” Check both paths and volume names before proceeding.
 
 ## What will I need to do?
 
 | Step | What the assistant does | What you do | What success looks like |
 |---|---|---|---|
-| 1. Identify the project | Records the project identity, paths, chats and worktrees, and checks disk space | Confirm the right project and destination, save files and pause edits | The project and everything to be checked have been identified |
-| 2. Copy | Copies the complete project and keeps the original | Usually nothing | A destination copy and a record of this copy exist |
-| 3. Verify the copy | Compares SHA-256 file hashes, folders, attributes, permissions, hard links and NTFS alternate data streams | Pause any writes still changing the source | Strict comparison passes after any differences are resolved |
-| 4. Update the original project | Changes the primary folder on the same Codex project, reads the settings back and reconnects worktrees as needed | Follow the click-by-click instructions if desktop controls are unavailable | The project keeps its ID, and its primary folder points to the destination |
-| 5. Keep the old path working | Supplies a PowerShell command with your exact paths for the option you chose | **Choose A or B before exiting**. Fully quit Codex, including the tray app, and use a separate PowerShell window opened from Start | `LinkType` is `Junction` and `Target` is the new project path |
-| 6. Test an existing chat | Checks the junction, then verifies that one eligible old chat can read and write through both paths | **Choose A or B after reopening** Codex | The chat's default directory and the new folder reach the same test file, and the file has been cleaned up |
-| 7. Review and reclaim space | Reports chat, worktree and backup checks separately and shows the full paths | Decide when to manually remove the verified physical backup | Any unique backup data has been accounted for, and the old-name junction remains available |
+| 1. Identify | Checks the host, paths and volume identities, and records a baseline for chats and worktrees | Choose the project and destination; save files and pause writes | Paths, available space, baseline and evidence coverage are clear |
+| 2. Copy | Copies the project and keeps the source intact | Usually nothing | A destination copy and a record of the operation exist |
+| 3. Verify | Hashes file contents with SHA-256 and checks folders, permissions, hard links and platform-specific metadata | Pause any remaining writes | The strict comparison passes |
+| 4. Open the new location | Updates the existing Codex source folder, or checks a fresh CLI/generic session starts in the new project; reconnects Git worktrees as needed | Open or confirm the project in the owning host | New work uses the destination and project/worktree mappings are accounted for |
+| 5. Keep the old path working | Prepares one command with your actual paths for the option you chose | **Choose A or B before quitting**. Close the application holding the folder and use an independent PowerShell window or Mac terminal outside the project | The original name links to the exact destination; the backup is the original physical folder |
+| 6. Test an existing chat | Checks the link, original session identity and actual reads and writes in both directions | **Choose A or B after restart and link verification**; use a chat that existed before migration | Both paths reach the same test file and cleanup succeeds |
+| 7. Review | Reports history, worktrees and backup results along with the three full paths | Decide when to manually remove the verified physical backup | All differences are accounted for and the old-name link remains in place |
 
-**Step 5 — how to rename the original.** With A, you rename the original folder in File Explorer, then paste the command to create and check the junction. With B, the command handles the rename, junction and checks. In both cases you get the command **before** you quit Codex. Save it in Notepad if helpful. After running it, reopen Codex and say “The junction is in place.” The assistant checks the current state before continuing.
+**Step 5: choose how to rename the source.** With A, rename it yourself in File Explorer or Finder, then paste the command to create and verify the link. With B, the command renames it, creates the link and checks it. Save your chosen command before quitting the agent. The output should show `Junction` on Windows or `SymbolicLink` on macOS and a `Target` matching the full destination path. Reopen the agent and say “The link is in place.”
 
-**Step 6 — how to test a chat.** With A, paste a supplied test prompt into a selected old chat that used the main project folder, then return with the result. With B, the assistant runs the test in the current chat if it qualifies. To test another chat, it asks you to select it and explicitly authorize one visible test message. Available desktop integrations determine which UI actions, history checks and messages can be performed automatically. Where an integration is missing, the assistant guides you through the manual step and reports what could be verified.
+**Step 6: choose how to test the old session.** With A, paste a supplied prompt into the selected old chat and return with its result. With B, the assistant can test in the current chat if it qualifies. Sending a visible prompt to another chat requires a suitable host integration, a specific chat selection and your explicit permission. Otherwise, paste it manually. In Claude Code, first try `claude --resume <original-session-id>`. In the Windows test, version 2.1.150 could not find the old record by ID alone after the project root changed. Using `claude --resume <absolute-path-to-original-session.jsonl>` restored the same ID and its original test marker. From the resumed session's default destination directory, the probe verified reads and writes through the old link and the same target file. The native `/codex-project-migration` command also prompted for the project in an isolated fixture. No transcript upload or editing is needed. [Host guide](skills/codex-project-migration/references/hosts.md) · [Claude Code session options](https://code.claude.com/docs/en/cli-reference)
 
 ## Which folder can I delete afterward?
 
-This example uses a fictional project named `Demo`. The junction keeps the old address usable while D: holds the active files.
+> [!CAUTION]
+> **⚠️ Do not remove the folder entry at the original project path.** It is a directory junction on Windows or a directory symbolic link on macOS. Existing chats use that entry to find the new files. Removing the link breaks the old address. **Opening that folder and deleting files inside it can delete the active files on the destination volume.**
+
+These are fictional `Demo` paths. The final report supplies the three exact paths for your move.
 
 ```text
-Before
-C:\Projects\Demo              Original project folder
+Windows
+E:\Projects\Demo                      Original-name junction → F:\Work\Demo            Keep
+F:\Work\Demo                           Active project folder                           Keep
+E:\Projects\Demo_迁移备份               Original folder, renamed as backup              Remove manually after acceptance
 
-After
-D:\CodexProjects\Demo         Active project files                Keep
-C:\Projects\Demo              Junction → D:\CodexProjects\Demo    Keep
-C:\Projects\Demo_迁移备份     Original files, renamed as backup   Remove manually after verification
+macOS
+/Users/example/Projects/Demo           Original-name symlink → /Volumes/Work/Projects/Demo   Keep
+/Volumes/Work/Projects/Demo            Active project folder                                  Keep
+/Users/example/Projects/Demo_迁移备份    Original folder, renamed as backup                     Remove manually after acceptance
 ```
 
-The suffix `_迁移备份` means “migration backup.” **Deleting files inside `C:\Projects\Demo` now deletes the active files on D:.** To reclaim space, use the exact backup path in your final report and remove only the verified backup folder. The assistant leaves that decision to you.
+**⛔ Keep the backup** if it contains unique files, unexplained differences remain, or relevant checks are still pending. The suffix `_迁移备份` means “migration backup”. The assistant leaves folder removal to you.
 
 ## How do I know it worked?
 
-Here is a **fictional acceptance report**:
-
-| Check | Example result | What it demonstrates |
-|---|---|---|
-| Project files | 120 files, all SHA-256 hashes match | The copy passed a per-file content check |
-| Chat history | 4 of 4 original IDs returned a historical turn | Those four chats have readable history |
-| Old-chat write test | 1 old main-folder chat passed | A random file was created in its default working directory, read and identified on D:, appended to on D:, read back through the old path and cleaned up |
-| Git worktrees | 1 of 1 connected to the expected repository | The commit, branch and uncommitted status match the baseline |
-| Original-drive backup | 0 backup-only files, 0 unexplained content differences | You can manually remove the backup at the path shown in the report |
-
-The report distinguishes the number of histories read from the number of chats actually tested for writes. If there is no eligible old main-folder chat, the report explains why and records the actual test count. The included [tests](tests/) are for developers. Isolated validation used real Windows file systems, PowerShell and Git. Desktop clicks and cross-chat messaging were simulated. For your migration, rely on the checks recorded for that run.
+A **fictional acceptance report** might show: 120 file hashes matched; all four histories covered by the available API were readable; one original main-folder chat was resumed by ID and wrote and read the same temporary file through its default directory and the destination; one worktree matched its original registration and changes; the backup contained zero unique files or unexplained differences. Readable histories and actual write-tested chats are counted separately. On macOS or after a host has rebound a session, the default directory may display the physical destination. The original session identity, actual default directory and old link are still checked separately.
 
 <a id="faq"></a>
 
 ## FAQ
 
-**Windows says the folder is in use. What now?** Save your files and close the application holding the folder open. Codex or a terminal may still be using it as the working directory. Fully quit Codex, including its tray app, then use a separate PowerShell window outside the project to run the command prepared for this migration. If Windows still reports a lock, keep the original and tell the assistant which step failed.
+**The folder is in use. What should I do?** Save your files, quit the agent holding the project (including the tray app on Windows), and close terminals still using the project directory. Run the prepared cutover command from outside the folder. If the lock persists, keep the original and report the error.
 
-**Why does my old chat still show C:?** The chat retained its earlier working-directory path. Windows follows the junction to D:. The step 6 write-and-read-back test confirms this on your computer.
+**What if an external volume is missing or its identity changed?** Remount the intended volume and verify its identity and location. Don't create a replacement project under a missing mount point. The assistant pauses cutover.
 
-**What is `.migration-checks`?** It holds local run records, file inventories and checkpoints used to resume a migration. Its default location is under the parent of the destination project folder. Keep the run directory until verification is complete. It may contain local paths and chat IDs, so redact details before sharing a report.
+**How do I resume an interrupted move? What is `.migration-checks`?** Keep both folders and the local audit directory, reopen the assistant and ask to resume the last migration. It compares the checkpoints and inventories with the actual folders. Audit files can include local paths and session IDs; redact them before sharing any report.
 
-**What if I close Codex halfway through?** Keep the original, the copy and the run records. Reopen Codex and ask to resume the previous migration. The assistant checks the recorded steps against the actual folders and reuses an existing correct junction.
+**Why are my Git worktrees still on the old volume?** Separate working copies can stay in place with their uncommitted changes. The assistant checks their connection to the new main repository. A worktree chat continues to edit its corresponding working copy.
 
-**Why are my Git worktrees still on C:?** Moving the main checkout changes where the shared repository lives. Separate working copies can stay in place with their own uncommitted files. The assistant checks that they connect to the new main repository. Worktree chats continue using their respective working copies.
-
-**Why did the assistant pause on a special file?** Cloud placeholders, encrypted, compressed or sparse files, hard links outside the project, and existing junctions inside the tree need individual handling. The assistant identifies the unsupported case and keeps the original in place. The technical guides for [file operations and recovery](skills/codex-project-migration/references/operations.md) and [chat verification](skills/codex-project-migration/references/chats.md) are available in Chinese.
+**Why does the assistant stop on some files?** Both volumes must use the supported local filesystem. Permissions it cannot verify, cloud placeholders and links to data outside the tree need individual review. On macOS, checks also cover ACLs, extended attributes (including resource forks), file flags and name collisions. The assistant keeps the original and explains the specific issue. See the [operations and recovery guide](skills/codex-project-migration/references/operations.md) and [chat verification guide](skills/codex-project-migration/references/chats.md) in Chinese.
 
 ## Feedback and license
 
-When reporting a problem, include your Windows, Python and PowerShell versions, the step, and a **redacted error description**. Replace real paths with examples such as `C:\Projects\Demo`. Keep chat text, chat IDs, full file inventories and migration reports on your machine. [Open an issue](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/issues)
+When opening an issue, include your operating system, agent, Python version, failing step and a **redacted error description**. Keep real local paths, chat text, session IDs, full file inventories and migration reports private. [Open an issue](https://github.com/nanjiang976-ui/Codex-Project-Migration-Assistant/issues)
 
 This project is licensed under the [MIT License](LICENSE).

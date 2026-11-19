@@ -33,6 +33,7 @@ The [macOS workflow](../.github/workflows/macos-apfs.yml) runs these tests on a 
 | Project copy | Empty directories, hidden/read-only files, NTFS named streams and hardlink identity. Extra target data and modified or unsupported source data are detected. |
 | Manual and automatic cutover | A user-renamed backup, scripted rename, actual directory lock, name collision, wrong junction, replaced target, failed verification and interrupted creation. |
 | Old-directory probe | The packaged script writes and reads in both directions from the synthetic old working directory; an incorrect working directory and a reused request ID are refused. |
+| Generic host with limited tools | A synthetic user selects an old session manually. The checkpoint rejects another request, a filesystem-only receipt, and a different claimed old session. It accepts only the preregistered request and matched identity. An unavailable history list remains unverified. |
 | Git and restart | Ordinary folder, repository without external worktrees, a linked worktree with staged, unstaged and untracked data, correct common directory, ordered checkpoint recovery and final backup comparison. |
 
 Tests drive the shipped CLI programs. Desktop source changes and old-chat working directories are represented with synthetic fixtures. No test uses the Codex desktop UI, edits a real project, reads a real chat or sends cross-chat messages. To accept a live migration, verify the chosen existing chat through the skill's documented workflow.

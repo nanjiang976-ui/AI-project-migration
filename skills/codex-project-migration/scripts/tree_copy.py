@@ -424,6 +424,15 @@ def main():
     check_disjoint((src, dst, audit))
     if not src.is_dir() or not dst.parent.is_dir() or not audit.parent.is_dir():
         raise ValueError("Source and the destination/audit parent directories must already exist")
+    checkpoint = audit.parent / "run.json"
+    if checkpoint.is_file():
+        config = json.loads(checkpoint.read_text(encoding="utf-8"))
+        if str(src) not in (config.get("source"), config.get("backup")) or str(dst) != config.get("target"):
+            raise ValueError("Paths differ from this migration's checkpoint.")
+        pinned = config.get("volumes")  # v1 checkpoints predate volume pinning
+        if pinned is not None and (nt.physical(src).drive.casefold() != pinned["source_volume"]
+                                  or nt.physical(dst).drive.casefold() != pinned["target_volume"]):
+            raise ValueError("Volume identity changed after preflight. Recheck the source and target.")
     prepare_audit(audit, src)
     with exclusive_lock(audit):
         tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:10]
