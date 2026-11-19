@@ -1,10 +1,10 @@
 # 宿主适配与会话证据 / Host adapters
 
-先确认**执行助手**和**旧聊天所属宿主**。文件复制、Git、原名入口可以由具有本地权限的助手执行；聊天归属、恢复和默认工作目录由原宿主证明。一次迁移绑定同一台主机、源实体和目标卷，不迁移账号、远程会话数据库或其他电脑的记录。
+先确认**执行助手**和**旧聊天所属宿主**。文件复制、Git、原名入口可以由具有本地权限的助手执行；聊天归属、恢复和默认工作目录由原宿主证明。一次迁移绑定同一台主机、源目录实体和目标盘，不迁移账号、远程会话数据库或其他电脑的记录。
 
 ## Codex 桌面
 
-- 个人安装位置通常为 `~/.agents/skills/codex-project-migration/`；保留已经能被当前环境识别的安装位置，避免重复注册。调用 `$codex-project-migration`。
+- 个人安装位置通常为 `~/.agents/skills/ai-project-migration/`；保留已经能被当前环境识别的安装位置，避免重复注册。调用 `$ai-project-migration`。
 - 读回原项目 ID，按 [聊天验收手册](chats.md) 分页收集适用的历史与工作树基准。换源后再次核对同一 ID、主要目录、其他源和原分组；能读出同一回合并不证明写到了目标目录。
 - 直接在合适的旧聊天里使用其默认 cwd。跨聊天仅向用户明确选定并授权的那一条发送一条可见消息，登记请求编号，重开时先检查相同请求的回执。
 
@@ -22,7 +22,7 @@ run_record.py mark --run RUN --step 6 --status passed --request-id UUID --sessio
 
 ## Claude Code 本地 CLI
 
-- 个人 Skill 放在 `~/.claude/skills/codex-project-migration/SKILL.md`。在本地 Claude Code 输入 `/codex-project-migration`。用户也可让其他执行助手引导 Claude 的迁移。用 `--host claude-code` 创建迁移运行记录，项目没有桌面项目 ID 时留空。
+- 个人 Skill 放在 `~/.claude/skills/ai-project-migration/SKILL.md`。在本地 Claude Code 输入 `/ai-project-migration`。用户也可让其他执行助手引导 Claude 的迁移。用 `--host claude-code` 创建迁移运行记录，项目没有桌面项目 ID 时留空。
 - 迁移前，在用户选定的一条原主目录会话中记录**宿主给出的会话 ID**和原目录；获准时同时记录该会话原始 transcript 的绝对路径作恢复后备。只记录选定会话所需元数据，避免读取或外传无关正文。文件系统测试前记录请求 UUID。在临时测试项目中，可用 `claude --session-id <新 UUID>` 创建独立测试基准。
 - 文件复制通过后，从新的实体目录打开 Claude Code，核对新会话实际默认目录。CLI 的这个动作对应桌面产品的换源；无需虚构“编辑项目”菜单。离线改名前退出正占用项目的 CLI、终端或编辑器，从独立终端运行该次命令。
 - 建好原路径入口后，从原项目地址尝试 `claude --resume <原会话ID>`。部分旧版本只在当前目录所属项目及其工作树内检索，宿主可能把旧地址解析为目标目录。如果找不到，使用支持的 `claude --resume <该会话原始.jsonl的绝对路径>`，或在宿主的恢复选择器中选择并核实原 ID。使用原始记录的路径只作为 Claude 官方恢复参数；不要改写或搬运聊天库。恢复时不要使用 `--fork-session`。只保留“按 ID 当前不可见”的阶段结果，直到确实恢复并核对同一 ID。

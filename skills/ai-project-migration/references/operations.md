@@ -8,9 +8,9 @@
 
 | 时机 | 调用 |
 |---|---|
-| 核对真实路径后 | `run_record.py volumes OLD NEW`。读系统卷身份、文件系统和同卷结果。macOS 使用本地挂载 APFS 的卷 UUID；目标原本在外接卷而该卷消失时停止，不能在挂载点留下的目录内另建副本 |
-| 用户确认路径和卷后 | `run_record.py start OLD NEW --host HOST --run RUN`。HOST 取本次项目/旧会话的所属宿主 `codex`、`claude-code` 或 `generic`。Codex 还须传真实 `--project-id ID`；其他宿主无原生 ID 时用独立 migration_id 关联本次运行。预先创建专用审计父目录 |
-| 源、目标同卷时 | 先告知“这次移动不会释放该卷空间”；只有用户明确选择同卷整理，才在 start 中添加 `--allow-same-volume` |
+| 核对真实路径后 | `run_record.py volumes OLD NEW`。读取两边的系统标识和文件系统，判断是否在同一个盘。macOS 按已挂载 APFS 盘的 Volume UUID 识别；目标外接盘断开时停止，避免在原挂载位置创建副本 |
+| 用户确认源盘、目标盘和路径后 | `run_record.py start OLD NEW --host HOST --run RUN`。HOST 取本次项目/旧会话的所属宿主 `codex`、`claude-code` 或 `generic`。Codex 还须传真实 `--project-id ID`；其他宿主无原生 ID 时用独立 migration_id 关联本次运行。预先创建专用审计父目录 |
+| 源和目标位于同一个盘时 | 先告知“这次移动不会释放这个盘的空间”；只有用户明确选择在同一个盘里整理文件，才在 start 中添加 `--allow-same-volume` |
 | 每步结束或暂停 | `run_record.py mark --run RUN --step N --status STATUS --evidence "结果和证据位置" --next-action "下一步由谁做"`。STATUS 可为 passed、waiting、blocked。仅步骤 6 可用 not_applicable（已确认没有适用旧聊天）或 unverified（无法取得真实证据，继续列出最终缺口并保留备份） |
 | 重开后 | `run_record.py show --run RUN`。旧 Windows 检查点也应读回；核实实际路径、实体、配置和既有回执再接续 |
 
@@ -48,7 +48,7 @@ cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-c
 
 只运行选择的一行，将生成的离线命令原样交给用户。Windows 用独立 PowerShell 5.1 或 7，完全退出占用者和托盘后台；macOS 用独立终端运行生成的 shell 命令，关闭以该目录为工作位置的应用/Agent。不要把终端开在待改名项目内。A 先手动把 OLD 改为指定 BACKUP，B 直接运行。预期是准确的 FullName、Target、Backup 和匹配本机的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
 
-重开后运行 `cutover.py status --plan RUN/cutover-plan.json`。phase 为 linked 且旧入口、目标和备份身份都匹配，才进入步骤 6。已经改好名但链接尚未建立时，通过备份实体标识和计划接续。遇到错误链接、重名备份、卷被更换或目录被占用，停止该次切换，保留原件并写出准确路径。实际已建立且身份正确的链接可直接验证，不重新创建。
+重开后运行 `cutover.py status --plan RUN/cutover-plan.json`。phase 为 linked 且旧入口、目标和备份身份都匹配，才进入步骤 6。已经改好名但链接尚未建立时，通过备份实体标识和计划接续。遇到错误链接、重名备份、盘的系统标识变化或目录被占用，停止该次切换，保留原件并写出准确路径。实际已建立且身份正确的链接可直接验证，不重新创建。
 
 ## 步骤 6–7 · 会话验证、复核与清理
 

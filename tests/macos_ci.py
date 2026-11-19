@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from record_checks import RecordChecks
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "codex-project-migration" / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "ai-project-migration" / "scripts"
 
 
 class DiskImage:

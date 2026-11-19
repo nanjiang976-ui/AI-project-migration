@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI 项目迁移助手"
+  short_description: "在本机跨盘迁移 Windows 或 macOS 项目，核验旧会话、Git 与备份"
+  default_prompt: "使用 $ai-project-migration 引导我迁移本地项目，并逐步报告验证结果和下一步。"

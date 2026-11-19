@@ -10,7 +10,7 @@ from uuid import uuid4
 
 sys.dont_write_bytecode = True
 REPOSITORY = Path(__file__).resolve().parents[1]
-SCRIPTS = REPOSITORY / "skills" / "codex-project-migration" / "scripts"
+SCRIPTS = REPOSITORY / "skills" / "ai-project-migration" / "scripts"
 
 
 def validate_roots(source_name, target_name):
@@ -47,7 +47,7 @@ def main():
     source_run, target_run = source / name, target / name
     cross_volume = source.stat().st_dev != target.stat().st_dev
     print(f"Source fixtures: {source_run}\nTarget fixtures and report: {target_run}\n"
-          f"Cross-volume run: {cross_volume}\nBoth fixture directories will be retained.", flush=True)
+          f"Source and target are on different drives: {cross_volume}\nBoth fixture directories will be retained.", flush=True)
     source_run.mkdir()
     target_run.mkdir()
     from scenarios import MigrationTests

@@ -35,7 +35,7 @@ def local_path(value):
                 f"需要本地 APFS 项目绝对路径：{p}")
         return p
     require(p.is_absolute() and len(p.drive) == 2 and p.drive[1] == ":" and p != Path(p.anchor),
-            f"需要本地磁盘中的绝对路径，不能使用卷根目录：{p}")
+            f"需要本地磁盘中的绝对路径，不能使用盘的根目录：{p}")
     for part in p.parts[1:]:
         require(part not in (".", "..") and not part.endswith((" ", "."))
                 and not any(c in '<>:"|?*' or ord(c) < 32 for c in part)
@@ -59,7 +59,7 @@ def reparse(st):
 def real_dir(p):
     st = p.lstat()
     require(stat.S_ISDIR(st.st_mode) and not reparse(st), f"需要实体目录：{p}")
-    require(st.st_ino and st.st_dev, f"无法确认卷和目录标识：{p}")
+    require(st.st_ino and st.st_dev, f"无法确认所在盘和目录的系统标识：{p}")
     if sys.platform == "darwin":
         from mac_fs import object_id
         return object_id(p)
@@ -99,7 +99,7 @@ def checked_paths(source, target, audit):
         plain_chain(p)
     paths = (source, target, backup, audit)
     if sys.platform == "darwin":
-        require(not any(os.path.ismount(p) for p in paths), "不能将卷挂载点作为项目或审计目录")
+        require(not any(os.path.ismount(p) for p in paths), "请在盘内选择项目或审计目录，不能直接使用挂载点")
     for i, p in enumerate(paths):
         for q in paths[i + 1:]:
             no_overlap(p, q)
@@ -222,7 +222,7 @@ def read_plan(filename):
     require(audit == Path(data["audit"]) and backup == Path(data["backup"]), "接续记录与目录不匹配")
     require(real_dir(source.parent) == data["parent_id"] and real_dir(audit) == data["audit_id"],
             "原目录的父目录或审计目录已被替换")
-    require(real_dir(target) == data["target_id"], f"目标卷或目标目录身份已更换：{target}")
+    require(real_dir(target) == data["target_id"], f"目标盘或目标目录的系统标识已改变：{target}")
     pinned = data["copy_evidence"]
     owner, current = verified_copy(source, target, audit, pinned["directory"])
     require(owner["source_id"] == data["source_id"] and owner["destination_id"] == data["target_id"]
@@ -254,7 +254,7 @@ def observe(data, source, target, backup):
         require(Path(named_target) == target, f"联接目标不是计划中的准确路径：{named_target}")
         require(saved is not None, f"联接存在，但找不到备份以完成本次清理前验收：{backup}")
         return "linked"
-    require(real_dir(source) == data["source_id"], f"源卷或原件身份与准备时不符：{source}")
+    require(real_dir(source) == data["source_id"], f"源盘或原项目的系统标识与准备时不符：{source}")
     require(saved is None, f"原件和备份名同时存在：{backup}")
     return "ready"
 

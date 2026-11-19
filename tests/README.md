@@ -1,6 +1,6 @@
 # Developer verification / 开发者验证
 
-安装与日常使用参见[中文首页](../README.md)或 [English guide](../README.en.md)。这些测试面向维护者，使用虚构项目和会话标识。普通用户无需运行。跨卷由系统卷身份核实。不同卷可以位于同一块物理磁盘。
+安装与日常使用参见[中文首页](../README.md)或 [English guide](../README.en.md)。这些测试面向维护者，使用虚构项目和会话标识。普通用户无需运行。测试按系统标识确认是否跨盘；两个盘也可能是同一块物理硬盘的不同分区。
 
 ## Run on Windows
 

@@ -46,7 +46,7 @@ def volumes(old, new):
             nt.volume(path)
         source, target = (nt.physical(p).drive.casefold() for p in (old, new))
     same = source == target
-    message = "这次移动不会释放该卷空间。确认仍要整理目录后再继续。" if same else "源和目标是不同的本地卷。"
+    message = "这次移动不会释放这个盘的空间。确认仍要整理目录后再继续。" if same else "源和目标位于不同的本地盘。"
     return dict(source_volume=source, target_volume=target, same_volume=same, message=message)
 
 

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - codex/multi-agent-apfs
+      - codex/installation-guide
   pull_request:
     branches:
       - main
