@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import unittest
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ class DiskImage:
         self.image = scratch / (label + ".sparseimage")
         self.mount = Path("/Volumes") / label
         self.attached = False
+        self.uuid = None
         if os.path.lexists(self.image) or os.path.lexists(self.mount):
             raise FileExistsError(label)
         subprocess.run(["hdiutil", "create", "-size", "384m", "-type", "SPARSE",
@@ -36,12 +38,28 @@ class DiskImage:
         info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", str(self.mount)]))
         if info.get("MountPoint") != str(self.mount) or info.get("FilesystemType") != "apfs":
             raise RuntimeError(f"Expected a dedicated APFS mount: {self.mount}")
-        return info["VolumeUUID"]
+        if self.uuid and self.uuid != info["VolumeUUID"]:
+            raise RuntimeError(f"Remounted a different fixture volume: {self.mount}")
+        self.uuid = info["VolumeUUID"]
+        return self.uuid
 
     def detach(self):
-        if self.attached:
-            subprocess.run(["hdiutil", "detach", str(self.mount)], check=True)
-            self.attached = False
+        if not self.attached:
+            return
+        for attempt in range(4):
+            info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", str(self.mount)]))
+            if self.uuid is None or info.get("VolumeUUID") != self.uuid or info.get("MountPoint") != str(self.mount):
+                raise RuntimeError(f"Refusing to detach an unidentified fixture volume: {self.mount}")
+            # Spotlight on a hosted runner can briefly keep an otherwise idle
+            # image busy. Only this test's UUID-bound disposable image may be forced.
+            cmd = ["hdiutil", "detach", str(self.mount)]
+            if attempt == 3:
+                cmd.append("-force")
+            if subprocess.run(cmd).returncode == 0:
+                self.attached = False
+                return
+            time.sleep(1)
+        raise RuntimeError(f"Could not detach the fixture volume: {self.mount}")
 
 
 @contextmanager
