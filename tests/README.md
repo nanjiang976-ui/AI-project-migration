@@ -1,0 +1,32 @@
+# Developer verification / 开发者验证
+
+安装与日常使用参见[中文首页](../README.md)或 [English guide](../README.en.md)。本目录供维护者验证发布包。实际运行附带的脚本会创建并保留临时项目、联接、Git 工作树和本机回执。普通用户无需运行这些测试。
+
+## Run on Windows
+
+Use local NTFS storage, CPython 3.12 or later, Git and Windows PowerShell. If `pwsh.exe` is available, the suite also exercises PowerShell 7; otherwise that individual test is reported as skipped. No GitHub account, network or Codex desktop session is needed.
+
+1. Create **two new empty folders** outside your projects, repositories and skill installation. Give the test account create, modify and rename access. For a genuine cross-volume test, put the folders on different local NTFS volumes. The report records whether the volumes actually differ.
+2. From the directory containing this repository's `README.md`, run the command below. Replace both example paths with the absolute paths you have prepared. The runner refuses drive roots, non-empty folders, redirected paths, overlapping paths and paths within a Git checkout. It prints the exact two unique fixture locations before creating them.
+3. Check the `unittest` output and the printed `result.json` path. Each scenario uses its own synthetic data. Keep both generated directories together if you want to revisit the receipts. For another run, select two fresh empty folders.
+
+```powershell
+python -B tests/run.py --source-scratch 'C:\TestScratch\DemoSource' --target-scratch 'D:\TestScratch\DemoTarget'
+```
+
+## Coverage
+
+| Real filesystem or Git checks | What is verified |
+|---|---|
+| Project copy | Empty directories, hidden/read-only files, NTFS named streams and hardlink identity. Extra target data and modified or unsupported source data are detected. |
+| Manual and automatic cutover | A user-renamed backup, scripted rename, actual directory lock, name collision, wrong junction, replaced target, failed verification and interrupted creation. |
+| Old-directory probe | The packaged script writes and reads in both directions from the synthetic old working directory; an incorrect working directory and a reused request ID are refused. |
+| Git and restart | Ordinary folder, repository without external worktrees, a linked worktree with staged, unstaged and untracked data, correct common directory, ordered checkpoint recovery and final backup comparison. |
+
+Tests drive the shipped CLI programs. Desktop source changes and old-chat working directories are represented with synthetic fixtures. No test uses the Codex desktop UI, edits a real project, reads a real chat or sends cross-chat messages. To accept a live migration, verify the chosen existing chat through the skill's documented workflow.
+
+## After testing / 测试后清理
+
+Keep both generated `migration-tests-…` folders to inspect the evidence. The target-side folder contains `result.json`. When finished, you can manually remove the two exact fixture folders printed by the runner. Removing one side breaks the matching **test** junction or worktree on the other side. Leave the parent scratch directories and any real project paths alone.
+
+两个测试根目录各会包含一个 `migration-tests-…` 子目录；目标侧还存有本轮 `result.json`。部分小型 Git 工作树和目录联接会连接这两处测试数据。需要复查时保留两边。测试完成后如决定清理，在资源管理器中按运行前打印的**两个确切测试路径**手动移除这两棵测试目录。清除其中一侧，会使另一侧对应的测试联接或 Git 工作树失去目标。不要通过某个联接进入正式盘目录清理文件。测试程序不自动批量清理目录。

@@ -1,0 +1,309 @@
+"""Prepare a restartable offline Windows junction cutover and verify its state."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+from uuid import uuid4
+
+PLAN_NAME = "cutover-plan.json"
+BACKUP_SUFFIX = "_迁移备份"
+
+
+class MigrationError(Exception):
+    """An unexpected path or state needs attention before proceeding."""
+
+
+def require(condition, message):
+    if not condition:
+        raise MigrationError(message)
+
+
+def local_path(value):
+    p = Path(value)
+    require(p.is_absolute() and len(p.drive) == 2 and p.drive[1] == ":" and p != Path(p.anchor),
+            f"需要本地磁盘中的绝对路径，不能使用卷根目录：{p}")
+    for part in p.parts[1:]:
+        require(part not in (".", "..") and not part.endswith((" ", "."))
+                and not any(c in '<>:"|?*' or ord(c) < 32 for c in part)
+                and not Path(part).is_reserved(), f"不安全的路径：{p}")
+    return p
+
+
+def stat_if_present(p):
+    try:
+        return p.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def reparse(st):
+    return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def real_dir(p):
+    st = p.lstat()
+    require(stat.S_ISDIR(st.st_mode) and not reparse(st), f"需要实体目录：{p}")
+    require(st.st_ino and st.st_dev, f"无法确认卷和目录标识：{p}")
+    return [st.st_dev, st.st_ino]
+
+
+def plain_chain(p):
+    for ancestor in [*reversed(p.parents), p]:
+        real_dir(ancestor)
+
+
+def no_overlap(a, b):
+    require(not (a.is_relative_to(b) or b.is_relative_to(a)), f"路径不得重叠：{a} / {b}")
+
+
+def checked_paths(source, target, audit):
+    source, target, audit = map(local_path, (source, target, audit))
+    backup = source.with_name(source.name + BACKUP_SUFFIX)
+    for p in (source.parent, target.parent, audit):
+        plain_chain(p)
+    paths = (source, target, backup, audit)
+    for i, p in enumerate(paths):
+        for q in paths[i + 1:]:
+            no_overlap(p, q)
+            # Canonicalize existing ancestors as well (e.g. DOS 8.3 aliases).
+            # The old entry itself can legitimately be a junction on resume.
+            no_overlap(p.parent.resolve(strict=True) / p.name,
+                       q.parent.resolve(strict=True) / q.name)
+    target_real = target.resolve(strict=True)
+    audit_real = audit.resolve(strict=True)
+    no_overlap(target_real, audit_real)
+    for p in (source, backup):
+        st = stat_if_present(p)
+        physical = (p.resolve(strict=True) if st and not reparse(st)
+                    else p.parent.resolve(strict=True) / p.name)
+        no_overlap(physical, target_real)
+        no_overlap(physical, audit_real)
+    for dep in (Path(__file__).resolve(), Path(sys.executable).resolve()):
+        require(not any(dep.is_relative_to(root) for root in (source, target, backup)),
+                f"离线命令依赖的程序位于迁移范围内：{dep}")
+    return paths
+
+
+def file_id(st):
+    return (st.st_dev, st.st_ino)
+
+
+def save_exclusive(path, data):
+    """Atomic publish without overwriting a concurrent writer (Windows rename)."""
+    stage = path.with_name("." + uuid4().hex + ".tmp")
+    with stage.open("x", encoding="utf-8") as handle:
+        staged_id = file_id(os.fstat(handle.fileno()))
+        try:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            handle.close()
+            if file_id(stage.lstat()) == staged_id:
+                stage.unlink()
+            raise
+    try:
+        os.rename(stage, path)
+    except OSError:
+        if stage.exists() and file_id(stage.lstat()) == staged_id:
+            stage.unlink()
+        raise
+
+
+def ordinary_record(path):
+    st = path.lstat()
+    require(stat.S_ISREG(st.st_mode) and not reparse(st) and st.st_nlink == 1,
+            f"需要本次审计的独立普通文件：{path}")
+    raw = path.read_bytes()
+    return json.loads(raw), hashlib.sha256(raw).hexdigest()
+
+
+def verified_copy(source, target, audit, directory):
+    directory = local_path(directory)
+    require(directory.parent == audit, "复制审计目录必须直接位于本次迁移审计目录下")
+    plain_chain(directory)
+    owner, owner_hash = ordinary_record(directory / "owner.json")
+    require(Path(owner["source"]) == source and Path(owner["destination"]) == target,
+            "复制记录与计划中的原路径或目标路径不符")
+    require(owner["destination_id"] == real_dir(target) and owner["source_id"] != owner["destination_id"],
+            "目标目录已被替换，或与原目录是同一实体")
+    markers = sorted(directory.glob("*-started.json"))
+    require(markers, "缺少受管复制/核验的启动记录")
+    marker = markers[-1]
+    begun, _ = ordinary_record(marker)
+    tag = marker.name.removesuffix("-started.json")
+    require(re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{10}", tag) and begun.get("run") == tag,
+            "最新操作的审计编号异常")
+    require(begun.get("action") == "verify" and Path(begun["source"]) == source
+            and Path(begun["destination"]) == target, "最后一步必须是同一原件和目标的独立核验")
+    receipt = directory / (tag + "-verify.json")
+    require(stat_if_present(receipt) is not None, "最近的校验尚未结束，请等待或重做独立核验")
+    report, report_hash = ordinary_record(receipt)
+    require(all(report.get(k) == begun[k] for k in ("run", "action", "source", "destination"))
+            and report.get("status") == "passed" and report.get("differences") == {}
+            and report.get("source_summary") == report.get("destination_summary")
+            and isinstance(report.get("source_summary"), dict)
+            and bool(report["source_summary"].get("directories_including_root")),
+            f"最近的校验未通过或报告不完整：{receipt}")
+    evidence = dict(directory=str(directory), directory_id=real_dir(directory),
+                    owner_sha256=owner_hash, report=receipt.name, report_sha256=report_hash)
+    return owner, evidence
+
+
+def read_plan(filename):
+    filename = local_path(filename)
+    require(filename.name == PLAN_NAME, f"需要本次迁移的 {PLAN_NAME}")
+    plain_chain(filename.parent)
+    st = filename.lstat()
+    require(stat.S_ISREG(st.st_mode) and not reparse(st), "接续记录必须是普通文件")
+    with filename.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    require(data["version"] == 2, "不支持该接续记录版本，需人工核对旧记录")
+    source, target, backup, audit = checked_paths(data["source"], data["target"], filename.parent)
+    require(audit == Path(data["audit"]) and backup == Path(data["backup"]), "接续记录与目录不匹配")
+    require(real_dir(source.parent) == data["parent_id"] and real_dir(audit) == data["audit_id"],
+            "原目录的父目录或审计目录已被替换")
+    require(real_dir(target) == data["target_id"], f"D 盘目标已更换：{target}")
+    pinned = data["copy_evidence"]
+    owner, current = verified_copy(source, target, audit, pinned["directory"])
+    require(owner["source_id"] == data["source_id"] and owner["destination_id"] == data["target_id"]
+            and current["directory_id"] == pinned["directory_id"]
+            and current["owner_sha256"] == pinned["owner_sha256"],
+            "本计划依据的原件、目标或复制审计已被替换")
+    require(re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{10}-verify\.json", pinned["report"]),
+            "计划中的核验报告名不合法")
+    _, initial_digest = ordinary_record(Path(pinned["directory"]) / pinned["report"])
+    require(initial_digest == pinned["report_sha256"], "建立计划时的核验报告已变化")
+    return data, source, target, backup
+
+
+def observe(data, source, target, backup):
+    old = stat_if_present(source)
+    saved = stat_if_present(backup)
+    if saved is not None:
+        require(real_dir(backup) == data["source_id"], f"备份名已占用或备份身份不符：{backup}")
+    if old is None:
+        require(saved is not None, f"找不到经记录的原件或备份：{backup}")
+        return "renamed"
+    if reparse(old):
+        require(source.is_junction() and source.samefile(target), f"原路径指向意外目标：{source}")
+        # samefile can pass via a second junction. Require the declared target itself.
+        named_target = os.readlink(source)
+        if named_target.startswith("\\\\?\\") or named_target.startswith("\\??\\"):
+            named_target = named_target[4:]
+        require(Path(named_target) == target, f"联接目标不是计划中的准确路径：{named_target}")
+        require(saved is not None, f"联接存在，但找不到备份以完成本次清理前验收：{backup}")
+        return "linked"
+    require(real_dir(source) == data["source_id"], f"C 盘原件身份与准备时不符：{source}")
+    require(saved is None, f"原件和备份名同时存在：{backup}")
+    return "ready"
+
+
+def state(filename):
+    data, source, target, backup = read_plan(filename)
+    return observe(data, source, target, backup), source, target, backup
+
+
+def ps_literal(value):
+    # PowerShell can interpret curved apostrophes as closing quotes.
+    parts = re.split("([\u2018-\u201b])", str(value))
+    expressions = ["[char]0x%04x" % ord(part) if i % 2
+                   else "'" + part.replace("'", "''") + "'"
+                   for i, part in enumerate(parts)]
+    return expressions[0] if len(parts) == 1 else "(" + " + ".join(expressions) + ")"
+
+
+def prepare(args):
+    source, target, backup, audit = checked_paths(args.source, args.target, args.audit)
+    plan = audit / PLAN_NAME
+    owner, evidence = verified_copy(source, target, audit, args.copy_audit)
+    if stat_if_present(plan) is None:
+        present = stat_if_present(source)
+        require(not present or not reparse(present),
+                "本次缺少切换计划，但原名已为联接。请先只读核实复制记录、目标、备份身份和现有联接，不要改名或覆盖")
+        data = dict(version=2, source=str(source), target=str(target), backup=str(backup),
+                    audit=str(audit), source_id=owner["source_id"], target_id=owner["destination_id"],
+                    copy_evidence=evidence,
+                    audit_id=real_dir(audit), parent_id=real_dir(source.parent))
+        observe(data, source, target, backup)
+        save_exclusive(plan, data)
+    existing, _, _, _ = read_plan(plan)
+    require(evidence["directory"] == existing["copy_evidence"]["directory"],
+            "该计划已绑定另一个复制审计目录")
+    phase, old, dest, _ = state(plan)
+    require((source, target) == (old, dest), "该审计目录属于另一项迁移，请使用其对应的接续记录")
+    args_for_ps = (sys.executable, "-B", str(Path(__file__).resolve()),
+                   "apply", "--plan", str(plan), "--mode", args.mode)
+    command = "& " + " ".join(ps_literal(arg) for arg in args_for_ps)
+    print(f"phase={phase}\nplan={plan}\nbackup={backup}")
+    # Keep the external PowerShell current directory clear of the project being renamed.
+    print("& { Set-Location -LiteralPath " + ps_literal(audit)
+          + " -ErrorAction Stop; " + command + " }")
+
+
+def status(args):
+    phase, source, target, backup = state(args.plan)
+    print(json.dumps(dict(phase=phase, source=str(source), target=str(target),
+                          backup=str(backup)), ensure_ascii=False))
+
+
+def apply_locked(args):
+    phase, source, target, backup = state(args.plan)
+    if phase == "ready":
+        require(args.mode == "auto", f"你选择了手动改名。请将 {source} 改名为 {backup.name} 后重试")
+        # os.rename on Windows refuses an existing destination. No cross-drive move.
+        os.rename(source, backup)
+        phase, source, target, backup = state(args.plan)
+    if phase == "renamed":
+        try:
+            # CPython's Windows helper creates a local directory junction without a shell.
+            from _winapi import CreateJunction
+            CreateJunction(str(target), str(source))
+        except (OSError, ImportError) as exc:
+            raise MigrationError(f"联接未创建，原件备份位于 {backup}。"
+                                 f"排除问题后用同一命令接续。原因：{exc}") from exc
+    phase, source, target, backup = state(args.plan)
+    require(phase == "linked", "联接尚未通过检查")
+    print(f"FullName : {source}\nLinkType : Junction\nTarget   : {target}\nBackup   : {backup}")
+
+
+def apply(args):
+    from tree_copy import exclusive_lock
+    data, _, _, _ = read_plan(args.plan)
+    copy_dir = Path(data["copy_evidence"]["directory"])
+    lock_info = (copy_dir / "copy.lock").lstat()
+    require(stat.S_ISREG(lock_info.st_mode) and not reparse(lock_info) and lock_info.st_nlink == 1,
+            "受管复制锁文件异常")
+    with exclusive_lock(copy_dir):
+        apply_locked(args)
+
+
+def main():
+    require(os.name == "nt" and sys.version_info >= (3, 12), "需要 Windows 和 CPython 3.12 或更新版本")
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(required=True)
+    p = commands.add_parser("prepare")
+    for flag in ("source", "target", "audit", "copy-audit"):
+        p.add_argument("--" + flag, required=True)
+    p.add_argument("--mode", choices=("manual", "auto"), required=True)
+    p.set_defaults(handler=prepare)
+    for name, handler in (("status", status), ("apply", apply)):
+        p = commands.add_parser(name)
+        p.add_argument("--plan", required=True)
+        if name == "apply":
+            p.add_argument("--mode", choices=("manual", "auto"), required=True)
+        p.set_defaults(handler=handler)
+    args = parser.parse_args()
+    args.handler(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (MigrationError, OSError, KeyError, ValueError) as e:
+        print(f"已停止：{e}", file=sys.stderr)
+        sys.exit(1)

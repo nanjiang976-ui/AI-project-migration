@@ -1,0 +1,14 @@
+# Local interpreter and editor state
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+
+# Migration evidence and local test output belong outside the checkout.
+.migration-checks/
+test-results/
+*.jsonl.gz
+*.log
+.env
+.env.*
