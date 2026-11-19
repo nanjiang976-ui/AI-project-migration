@@ -14,9 +14,10 @@ from uuid import uuid4
 from _winapi import CreateJunction
 import migration_ntfs as nt
 import tree_copy
+from record_checks import RecordChecks
 
 
-class MigrationTests(unittest.TestCase):
+class MigrationTests(RecordChecks, unittest.TestCase):
     @classmethod
     def configure(cls, scripts, source_run, target_run):
         cls.scripts = scripts
@@ -167,6 +168,10 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(response["request_id"], token)
         self.assertEqual([p.name for p in self.new.iterdir()], ["sample.txt"])
         self.helper("probe", "--plan", self.plan, "--request-id", token, cwd=self.old, success=False)
+        resolved = json.loads(self.helper("probe", "--plan", self.plan, "--request-id", str(uuid4()),
+                                          "--resumed-session-id", "fixture-original-session", cwd=self.new))
+        self.assertEqual(resolved["cwd_form"], "resolved_target")
+        self.assertTrue(resolved["session_identity_requires_host_match"])
 
     def test_auto_rename_powershell(self):
         self.copy_verified()
@@ -254,7 +259,7 @@ class MigrationTests(unittest.TestCase):
         (linked / "sample.txt").write_bytes(b"work in progress")
         (linked / "untracked.txt").write_bytes(b"keep")
         self.helper("run_record", "start", self.old, self.new, "--project-id", "demo-project",
-                    "--run", self.audit)
+                    "--run", self.audit, "--allow-same-volume")
         before = self.audit / "git-before.json"
         self.helper("git_check", "baseline", self.old, "--out", before)
         self.assertEqual(json.loads(before.read_text(encoding="utf-8"))["worktree_count"], 1)
@@ -292,7 +297,10 @@ class MigrationTests(unittest.TestCase):
         admin = json.loads(before.read_text(encoding="utf-8"))["snapshot"]["linked"][0]["admin"]
         self.assertLessEqual(set(verify_out), {"mtime_ns"})
         self.assertLessEqual(set(verify_out.get("mtime_ns", [])), {".", f".git/worktrees/{admin}/gitdir"})
-        self.assertIsNone(mark(7)["next_step"])
+        end = mark(7)
+        self.assertIsNone(end["next_step"])
+        self.assert_cleanup(end, True)
+        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), True)
 
     def command_for_final_comparison(self):
         cmd = [sys.executable, "-B", self.scripts / "tree_copy.py", "verify", self.backup, self.new,

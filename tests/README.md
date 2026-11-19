@@ -1,6 +1,6 @@
 # Developer verification / 开发者验证
 
-安装与日常使用参见[中文首页](../README.md)或 [English guide](../README.en.md)。本目录供维护者验证发布包。实际运行附带的脚本会创建并保留临时项目、联接、Git 工作树和本机回执。普通用户无需运行这些测试。
+安装与日常使用参见[中文首页](../README.md)或 [English guide](../README.en.md)。这些测试面向维护者，使用虚构项目和会话标识。普通用户无需运行。跨卷由系统卷身份核实。不同卷可以位于同一块物理磁盘。
 
 ## Run on Windows
 
@@ -11,8 +11,20 @@ Use local NTFS storage, CPython 3.12 or later, Git and Windows PowerShell. If `p
 3. Check the `unittest` output and the printed `result.json` path. Each scenario uses its own synthetic data. Keep both generated directories together if you want to revisit the receipts. For another run, select two fresh empty folders.
 
 ```powershell
-python -B tests/run.py --source-scratch 'C:\TestScratch\DemoSource' --target-scratch 'D:\TestScratch\DemoTarget'
+python -B tests/run.py --source-scratch 'E:\TestScratch\DemoSource' --target-scratch 'F:\TestScratch\DemoTarget'
 ```
+
+## Run on macOS
+
+Use a native Mac with CPython 3.12+, Git, `diskutil`, `hdiutil` and permission to mount user-owned disk images. Pass one existing, empty scratch folder outside every project. A sample command (substitute your actual scratch folder):
+
+```sh
+python3 -B tests/macos_ci.py --scratch '/Users/example/TestScratch/apfs-ci'
+```
+
+The runner creates two uniquely named sparse disk images there, attaches them with ownership enabled, and checks their APFS volume UUIDs before using them. A case-sensitive source and a case-insensitive target exercise filename collisions. Tests verify data and metadata (including extended ACLs, resource forks, flags and internal hard links), real symbolic links, a real detach/remount, and a dirty Git worktree. It detaches its images when finished. Keep the two sparse image files for investigation, or remove them manually after they have been detached.
+
+The [macOS workflow](../.github/workflows/macos-apfs.yml) runs these tests on a native GitHub-hosted Mac with read-only repository permissions. A successful run demonstrates two APFS **test volumes**; it does not establish a test on two separate physical drives. No Agent login or model calls take place in this suite.
 
 ## Coverage
 

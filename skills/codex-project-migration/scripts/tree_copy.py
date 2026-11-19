@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
-import msvcrt
 import os
 from pathlib import Path
 import shutil
@@ -14,7 +13,9 @@ import stat
 import sys
 from uuid import uuid4
 
-import migration_ntfs as nt
+if os.name == "nt":
+    import msvcrt
+    import migration_ntfs as nt
 
 SETTABLE = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x80 | 0x100 | 0x2000
 COMPARE_FIELDS = ("type", "size", "sha256", "streams", "attrs", "mtime_ns", "security")
@@ -211,8 +212,16 @@ def verify(src, dst, audit, report):
 
 @contextmanager
 def exclusive_lock(audit):
-    # Windows releases this byte-range lock if the process exits or crashes.
+    # The kernel releases the lock if the process exits or crashes.
     with (audit / "copy.lock").open("a+b") as f:
+        if sys.platform == "darwin":
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+            return
         if f.seek(0, os.SEEK_END) == 0:
             f.write(b".")
             f.flush()
@@ -400,6 +409,11 @@ def prepare_audit(path, src):
 
 
 def main():
+    if sys.platform == "darwin":
+        from mac_tree import main as mac_main
+        return mac_main()
+    if os.name != "nt":
+        raise ValueError("Supported platforms: Windows NTFS and macOS APFS")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["copy", "verify"])
     parser.add_argument("source")

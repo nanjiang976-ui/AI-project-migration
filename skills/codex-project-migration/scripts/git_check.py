@@ -1,4 +1,4 @@
-"""Capture, reconnect and check Git worktrees during a Windows project move."""
+"""Capture, reconnect and check Git worktrees during a local project move."""
 import argparse
 import hashlib
 import json
@@ -19,13 +19,17 @@ def physical(path, directory=True):
     path = Path(os.path.abspath(path))
     for item in [*reversed(path.parents), path]:
         info = item.lstat()
-        require(not (info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT),
+        require(not stat.S_ISLNK(info.st_mode) and
+                not (os.name == "nt" and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT),
                 f"Unexpected reparse point: {item}")
     require(path.is_dir() if directory else path.is_file(), f"Unexpected type: {path}")
     return path
 
 
 def identity(path):
+    if sys.platform == "darwin":
+        from mac_fs import object_id
+        return object_id(path)
     info = path.stat()
     return [info.st_dev, info.st_ino]
 
@@ -214,6 +218,7 @@ def verify(destination, snap, allow_source=False):
 
 
 def main():
+    require(sys.platform in ("win32", "darwin"), "This helper targets Windows and macOS.")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["baseline", "repair", "verify"])
     parser.add_argument("root", type=Path)
