@@ -71,7 +71,11 @@ def disjoint(paths):
         while not p.exists():
             p = p.parent
         s = p.stat()
-        return (s.st_dev, s.st_ino), path.relative_to(p).parts
+        suffix = path.relative_to(p).parts
+        if suffix:
+            sensitive = case_sensitive(p)
+            suffix = tuple(name_key(part, sensitive) for part in suffix)
+        return (s.st_dev, s.st_ino), suffix
 
     for i, a in enumerate(paths):
         for j, b in enumerate(paths):
@@ -99,17 +103,25 @@ def check_run_volumes(src, dst, audit):
         raise ValueError("A volume differs from the preflight checkpoint; check mounts")
 
 
-def collisions(rows, dst):
+def case_sensitive(parent):
     # _PC_CASE_SENSITIVE from Darwin's sys/unistd.h. APFS normalizes lookups even
     # on case-sensitive volumes. Exclusive creation is the final kernel check.
-    sensitive = os.pathconf(dst.parent, 11)
+    sensitive = os.pathconf(parent, 11)
     if sensitive not in (0, 1):
         raise ValueError("Unable to determine target volume case sensitivity")
+    return bool(sensitive)
+
+
+def name_key(name, sensitive):
+    key = unicodedata.normalize("NFD", name)
+    return key if sensitive else key.casefold()
+
+
+def collisions(rows, dst):
+    sensitive = case_sensitive(dst.parent)
     seen = {}
     for p in rows:
-        key = unicodedata.normalize("NFD", p)
-        if not sensitive:
-            key = key.casefold()
+        key = name_key(p, sensitive)
         if key in seen:
             raise ValueError(f"Names may collide on the target: {seen[key]}, {p}")
         seen[key] = p
@@ -120,6 +132,13 @@ def differ(a, b):
 
 
 def verify(src, dst, audit, report):
+    ownerfile = audit / "owner.json"
+    ids = (fs.object_id(src), fs.object_id(dst))
+    if ownerfile.exists():
+        owner = json.loads(ownerfile.read_text(encoding="utf-8"))
+        if (owner.get("source"), owner.get("destination"), owner.get("source_id"),
+                owner.get("destination_id")) != (str(src), str(dst), *ids):
+            raise ValueError("Verify inputs differ from the original copy's directory identities")
     a, b = snapshot(src, True), snapshot(dst, True)
     diffs = defaultdict(list)
     for name, root, rows in (("source", src, a), ("destination", dst, b)):
@@ -140,6 +159,9 @@ def verify(src, dst, audit, report):
         diffs["extra_internal_link_groups"] = sorted(gb - ga)
     if xa or xb:
         diffs["external_hardlink_references"] = {"source": xa, "destination": xb}
+    if ((a["."]["identity"], b["."]["identity"]) != ids
+            or (fs.object_id(src), fs.object_id(dst)) != ids):
+        raise ValueError("Verified root directories changed during inventory")
     report.update(source_summary=summarize(a), destination_summary=summarize(b),
                   internal_hardlink_groups={"source": len(ga), "destination": len(gb)}, differences=diffs)
     return not diffs
@@ -158,6 +180,8 @@ def ids_contained(path, root, dev, entries):
 def copy(src, dst, audit, report):
     srcdev = src.stat().st_dev
     dest_uuid, dstdev = fs.volume_info(dst.parent)
+    parent_info = dst.parent.stat()
+    dst_parent_id = (parent_info.st_dev, parent_info.st_ino)
     rows = snapshot(src, True)
     save_manifest(audit / (report["run"] + "-source.jsonl.gz"), rows)
     groups, external = link_groups(rows)
@@ -171,7 +195,7 @@ def copy(src, dst, audit, report):
     if not os.path.lexists(dst):
         if ownerfile.exists():
             raise ValueError("Verified candidate disappeared; choose a new run")
-        fs.create_private(dst)
+        fs.create_private(dst, dst_parent_id)
         if dst.stat().st_dev != dstdev:
             raise ValueError("Destination parent volume changed")
         dump_json(ownerfile, dict(**owner, destination_id=fs.object_id(dst)))
@@ -227,7 +251,8 @@ def copy(src, dst, audit, report):
             if row["type"] == "dir":
                 dirs.append(k)
                 if k not in existing:
-                    fs.create_private(d)
+                    parent_key = d.parent.relative_to(dst).as_posix()
+                    fs.create_private(d, (dstdev, owned[parent_key]))
                     owned[k] = d.stat().st_ino
                     log.write(json.dumps([k, owned[k]]) + "\n")
                     log.flush()
@@ -235,15 +260,22 @@ def copy(src, dst, audit, report):
             if k in existing:
                 continue
             iid = row["identity"][1]
+            parent_key = d.parent.relative_to(dst).as_posix()
+            parent_id = (dstdev, owned[parent_key])
             if iid in anchors:
                 anchor = anchors[iid]
                 ids_contained(anchor, dst, dstdev, owned)
                 astat = anchor.lstat()
                 if astat.st_dev != dstdev or astat.st_ino != anchor_ids[iid]:
                     raise ValueError(f"Hardlink anchor changed: {anchor}")
-                os.link(anchor, d, follow_symlinks=False)
+                anchor_key = anchor.parent.relative_to(dst).as_posix()
+                with (fs.directory_fd(anchor.parent, (dstdev, owned[anchor_key])) as adir,
+                      fs.directory_fd(d.parent, parent_id) as ddir):
+                    if os.stat(anchor.name, dir_fd=adir, follow_symlinks=False).st_ino != anchor_ids[iid]:
+                        raise ValueError(f"Candidate link anchor was replaced: {anchor}")
+                    os.link(anchor.name, d.name, src_dir_fd=adir, dst_dir_fd=ddir, follow_symlinks=False)
             else:
-                fs.transfer(s, d, row)
+                fs.transfer(s, d, row, parent_id=parent_id)
                 anchors[iid], anchor_ids[iid] = d, d.lstat().st_ino
     for k in reversed(dirs):
         s, d = src / k, dst / k
@@ -255,7 +287,8 @@ def copy(src, dst, audit, report):
         # Never remove or overwrite independent directory-stream edits on retry.
         if k in existing and any(rows[k]["streams"].get(n) != x for n, x in existing[k]["streams"].items()):
             raise ValueError(f"Conflicting candidate directory attributes: {d}")
-        fs.transfer(s, d, rows[k], directory=True)
+        parent_id = dst_parent_id if k == "." else (dstdev, owned[d.parent.relative_to(dst).as_posix()])
+        fs.transfer(s, d, rows[k], directory=True, parent_id=parent_id, target_id=(dstdev, owned[k]))
     drift = changed_since(rows, snapshot(src, False))
     if drift:
         report["source_changed_during_copy"] = drift
@@ -273,7 +306,10 @@ def main():
     parser.add_argument("--audit", required=True)
     args = parser.parse_args()
     src, dst, audit = map(fs.checked_root, (args.source, args.destination, args.audit))
-    disjoint((src, dst, audit))
+    paths = (src, dst, audit)
+    if args.action == "copy":
+        paths += (src.with_name(src.name + "_迁移备份"),)
+    disjoint(paths)
     if not src.is_dir() or not dst.parent.is_dir() or not audit.parent.is_dir():
         raise ValueError("Source and destination/audit parent directories must already exist")
     check_run_volumes(src, dst, audit)

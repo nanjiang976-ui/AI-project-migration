@@ -1,6 +1,7 @@
 """Append-only checkpoints and final safety notices for a local project migration."""
 import argparse
 from datetime import datetime, timezone
+import gzip
 import json
 import os
 from pathlib import Path
@@ -127,21 +128,41 @@ def cleanup_check(config, run, chat_status):
     if not before.get("ok") or before.get("root")!=str(old):
         return False, "缺少已确认的 Git 基准"
     if before["kind"]!="non_git":
-        checked=False
+        checks=[]
         for path in run.glob("*.json"):
             if path.name in ("cutover-plan.json","git-before.json","run.json"): continue
             doc=read(path)
-            if isinstance(doc,dict) and doc.get("mode")=="verify" and doc.get("ok") and doc.get("root")==str(target) and doc.get("kind")==before["kind"]:
-                checked=True
-                break
-        if not checked:
-            return False,"缺少目标仓与工作树的验收记录"
+            if isinstance(doc,dict) and doc.get("mode")=="verify" and doc.get("root")==str(target):
+                checks.append(doc)
+        latest=max(checks,key=lambda item:item["utc"],default={})
+        if latest.get("ok") is not True or latest.get("kind")!=before["kind"]:
+            return False,"缺少成功的最新 Git 验收，或最新核验失败"
+        from git_check import verify as verify_git
+        verify_git(target,before["snapshot"])
         for tree in before["snapshot"]["linked"]:
             allowed_times.add(".git/worktrees/"+tree["admin"]+"/gitdir")
     if (set(diffs)-{"mtime_ns"} or set(diffs.get("mtime_ns",[]))-allowed_times
             or cmp.get("source_summary")!=cmp.get("destination_summary")):
         return False,"备份有独有内容、两边存在差异或发生了未解释的变更"
-    return True,"按最近一次复核；若之后又编辑过文件，请先重新比较"
+    # A previous success cannot authorize deleting a backup modified since that check.
+    if sys.platform=="darwin":
+        from mac_tree import snapshot
+    else:
+        from tree_copy import snapshot
+    from tree_copy import changed_since
+    for side,root in (("source",backup),("destination",target)):
+        current=snapshot(root,True)
+        with gzip.open(folder/(tag+"-"+side+".jsonl.gz"),"rt",encoding="utf-8") as saved:
+            for line in saved:
+                row=json.loads(line)
+                key=row.pop("path")
+                if current.get(key)!=row:
+                    return False,"文件已变化；请重新比较备份和目标"
+        if len(current)!=sum(cmp[side+"_summary"][k] for k in ("files","directories_including_root")):
+            return False,"文件清单已变化；请重新比较备份和目标"
+        if changed_since(current,snapshot(root,False)):
+            return False,"复核期间文件仍在变化"
+    return True,"本次已复验备份、目标和白名单内的时间差异；如继续编辑，请重新核验"
 
 
 def notice(config, valid, reason):

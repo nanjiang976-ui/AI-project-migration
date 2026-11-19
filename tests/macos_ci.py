@@ -167,6 +167,25 @@ class MacMigrationTests(RecordChecks, unittest.TestCase):
         self.copy("copy", fail=True)
         self.assertEqual((self.old / "README").read_bytes(), b"lower")
 
+    def test_conflicting_reserved_paths_stop_before_creating_candidate(self):
+        self.audit.mkdir()
+        self.helper("tree_copy", "copy", self.old, self.backup, "--audit", self.copy_audit, fail=True)
+        self.assertFalse(self.backup.exists())
+        alias = self.new.with_name(self.new.name.swapcase())
+        self.helper("tree_copy", "copy", self.old, self.new, "--audit", alias, fail=True)
+        self.assertFalse(self.new.exists())
+        self.assertFalse(alias.exists())
+
+    def test_verify_rejects_same_name_replacement_with_matching_content(self):
+        self.verified()
+        saved = self.new.with_name("previous-candidate")
+        self.new.rename(saved)
+        # Make another fully valid copy with its own receipt. The first receipt
+        # cannot vouch for its identity even though every copied byte matches.
+        self.helper("tree_copy", "copy", self.old, self.new, "--audit", self.audit / "other-copy")
+        self.copy("verify", fail=True)
+        self.assertTrue(saved.is_dir() and self.new.is_dir())
+
     def test_external_link_refused(self):
         self.audit.mkdir()
         (self.old / "outside").symlink_to(self.old.parent, target_is_directory=True)

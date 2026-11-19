@@ -1,5 +1,6 @@
 """Darwin APFS identity, ACLs, extended attributes and per-object metadata copy."""
 import ctypes as ct
+from contextlib import contextmanager
 import errno
 import hashlib
 import os
@@ -27,6 +28,8 @@ P = ct.c_void_p
 C = ct.c_char_p
 N = ct.c_size_t
 acl_get = bind("acl_get_file", P, C, ct.c_int)
+acl_init = bind("acl_init", P, ct.c_int)
+acl_set_fd = bind("acl_set_fd", ct.c_int, ct.c_int, P)
 acl_text = bind("acl_to_text", P, P, ct.POINTER(ct.c_ssize_t))
 acl_free = bind("acl_free", ct.c_int, P)
 list_xattr = bind("listxattr", ct.c_ssize_t, C, P, N, ct.c_int)
@@ -123,12 +126,43 @@ def acl(path):
         acl_free(obj)
 
 
-def create_private(path):
+@contextmanager
+def directory_fd(path, expected=None):
+    """Keep the object pinned; refuse symlinks anywhere in the path during writes."""
+    flags = os.O_DIRECTORY | os.O_RDONLY | os.O_NOFOLLOW
+    fd = os.open("/", flags)
+    try:
+        for part in path.parts[1:]:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        info = os.fstat(fd)
+        if expected is not None and (info.st_dev, info.st_ino) != expected:
+            raise ValueError(f"Parent identity changed before writing: {path}")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def create_private(path, parent_id=None):
     path = Path(path)
-    physical_chain(path.parent)
-    path.mkdir(mode=0o700)
-    if acl(path):
-        subprocess.run(["/bin/chmod", "-N", str(path)], check=True)
+    with directory_fd(path.parent, parent_id) as parent:
+        os.mkdir(path.name, 0o700, dir_fd=parent)
+        fd = os.open(path.name, os.O_DIRECTORY | os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            if acl(path):
+                empty = acl_init(0)
+                if not empty:
+                    fail(path)
+                try:
+                    if acl_set_fd(fd, empty):
+                        fail(path)
+                finally:
+                    acl_free(empty)
+            if not os.path.samestat(os.fstat(fd), path.lstat()):
+                raise ValueError(f"New directory was replaced: {path}")
+        finally:
+            os.close(fd)
     require_private(path)
 
 
@@ -169,7 +203,7 @@ def xattrs(path, with_hash):
     return result
 
 
-def transfer(src, dst, row, *, directory=False):
+def transfer(src, dst, row, *, directory=False, parent_id=None, target_id=None):
     """Use fds so fcopyfile cannot silently follow a replaced final symlink."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else 0)
     infd = os.open(src, flags)
@@ -177,8 +211,12 @@ def transfer(src, dst, row, *, directory=False):
         if os.fstat(infd).st_ino != row["identity"][1]:
             raise ValueError(f"Source was replaced before copying: {src}")
         outflags = flags if directory else os.O_WRONLY | os.O_NOFOLLOW | os.O_CREAT | os.O_EXCL
-        outfd = os.open(dst, outflags, 0o600)
+        with directory_fd(dst.parent, parent_id) as parent:
+            outfd = os.open(dst.name, outflags, 0o600, dir_fd=parent)
         try:
+            target_stat = os.fstat(outfd)
+            if target_id is not None and (target_stat.st_dev, target_stat.st_ino) != target_id:
+                raise ValueError(f"Candidate replaced before metadata transfer: {dst}")
             # COPYFILE_ACL | STAT | XATTR, plus DATA for regular files.
             if fcopyfile(infd, outfd, None, 7 if directory else 15) != 0:
                 fail(dst)
