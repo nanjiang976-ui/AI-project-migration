@@ -250,14 +250,26 @@ def main():
             or any((up / ".git").exists() or (up / "SKILL.md").is_file()
                    for up in (scratch, *scratch.parents))):
         p.error("Choose an existing empty scratch directory for the two exclusive disk image files.")
-    with mounted(scratch, "Src", "APFSX") as (a, auuid), mounted(scratch, "Dst", "APFS") as (b, buuid):
+    # hdiutil uses the full filesystem personality name; APFSX is a diskutil alias.
+    with mounted(scratch, "Src", "Case-sensitive APFS") as (a, auuid), mounted(scratch, "Dst", "APFS") as (b, buuid):
         if auuid == buuid or a.mount.stat().st_dev == b.mount.stat().st_dev:
             raise RuntimeError("Expected distinct APFS volumes")
         MacMigrationTests.source_image, MacMigrationTests.target_image = a, b
         tests = unittest.defaultTestLoader.loadTestsFromTestCase(MacMigrationTests)
-        ok = unittest.TextTestRunner(verbosity=2).run(tests).wasSuccessful()
+        result = unittest.TextTestRunner(verbosity=2).run(tests)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            for case, trace in result.failures + result.errors:
+                # Expose fixture diagnostics in the check itself as well as the runner log.
+                detail = trace[-2800:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                print(f"::error title={case.id()}::{detail}", flush=True)
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a", encoding="utf-8") as handle:
+                    handle.write(f"**Native APFS test volumes:** two independently mounted sparse images. "
+                                 f"Executed {result.testsRun}; failures {len(result.failures)}, "
+                                 f"errors {len(result.errors)}. No live agent sessions were used.\n")
     print("Images detached. Retained both test images in", scratch, flush=True)
-    return 0 if ok else 1
+    return 0 if result.wasSuccessful() else 1
 
 
 if __name__ == "__main__":
