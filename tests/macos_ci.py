@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -23,7 +24,7 @@ class DiskImage:
         self.label = label
         self.image = scratch / (label + ".sparseimage")
         self.mount = Path("/Volumes") / label
-        self.attached = False
+        self.device = None
         self.uuid = None
         if os.path.lexists(self.image) or os.path.lexists(self.mount):
             raise FileExistsError(label)
@@ -33,32 +34,64 @@ class DiskImage:
     def attach(self):
         if os.path.lexists(self.mount):
             raise RuntimeError(f"Unexpected occupied mount point: {self.mount}")
-        subprocess.run(["hdiutil", "attach", "-nobrowse", "-owners", "on", str(self.image)], check=True)
-        self.attached = True
+        attachment = plistlib.loads(subprocess.check_output(
+            ["hdiutil", "attach", "-plist", "-nobrowse", "-owners", "on", str(self.image)]))
+        # The outer whole disk is distinct from its synthesized APFS container.
+        devices = [e["dev-entry"] for e in attachment["system-entities"]
+                   if re.fullmatch(r"/dev/disk\d+", e.get("dev-entry", ""))]
+        if not devices:
+            raise RuntimeError(f"Could not identify the attached fixture device for {self.image}")
+        self.device = devices[0]
         info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", str(self.mount)]))
         if info.get("MountPoint") != str(self.mount) or info.get("FilesystemType") != "apfs":
             raise RuntimeError(f"Expected a dedicated APFS mount: {self.mount}")
         if self.uuid and self.uuid != info["VolumeUUID"]:
             raise RuntimeError(f"Remounted a different fixture volume: {self.mount}")
         self.uuid = info["VolumeUUID"]
+        if not self.still_attached():
+            raise RuntimeError(f"Could not confirm device ownership for {self.image}")
         return self.uuid
 
+    def still_attached(self):
+        images = plistlib.loads(subprocess.check_output(["hdiutil", "info", "-plist"]))["images"]
+        for image in images:
+            path = image.get("image-path")
+            if path and Path(path).is_file() and Path(path).samefile(self.image):
+                if self.device not in {e.get("dev-entry") for e in image["system-entities"]}:
+                    raise RuntimeError(f"Fixture image attachment identity changed: {self.image}")
+                return True
+        return False
+
     def detach(self):
-        if not self.attached:
+        if self.device is None:
             return
-        for attempt in range(4):
-            info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", str(self.mount)]))
-            if self.uuid is None or info.get("VolumeUUID") != self.uuid or info.get("MountPoint") != str(self.mount):
-                raise RuntimeError(f"Refusing to detach an unidentified fixture volume: {self.mount}")
-            # Spotlight on a hosted runner can briefly keep an otherwise idle
-            # image busy. Only this test's UUID-bound disposable image may be forced.
-            cmd = ["hdiutil", "detach", str(self.mount)]
-            if attempt == 3:
-                cmd.append("-force")
-            if subprocess.run(cmd).returncode == 0:
-                self.attached = False
+        for attempt in range(6):
+            # On a busy detach Disk Arbitration can remove the mount point before
+            # hdiutil returns or releases the image. Query the image/device pair,
+            # and never pass a missing or recycled mount path to detach.
+            if not self.still_attached():
+                self.device = None
                 return
+            if self.mount.is_mount():
+                cp = subprocess.run(["diskutil", "info", "-plist", str(self.mount)], capture_output=True)
+                if cp.returncode:
+                    if self.mount.is_mount():
+                        raise RuntimeError(f"Cannot identify volume at {self.mount}")
+                else:
+                    info = plistlib.loads(cp.stdout)
+                    if self.uuid != info.get("VolumeUUID") or info.get("MountPoint") != str(self.mount):
+                        raise RuntimeError(f"Refusing to detach an unidentified fixture volume: {self.mount}")
+            if not self.still_attached():
+                self.device = None
+                return
+            cmd = ["hdiutil", "detach", self.device]
+            if attempt >= 3:
+                cmd.append("-force")
+            subprocess.run(cmd)
             time.sleep(1)
+        if not self.still_attached():
+            self.device = None
+            return
         raise RuntimeError(f"Could not detach the fixture volume: {self.mount}")
 
 
