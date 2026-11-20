@@ -45,6 +45,8 @@ In **Claude Code**, enter `/ai-project-migration Help me move a local project. P
 
 If you haven't named a project, the assistant first asks **“Which local project do you want to migrate?”** Once you choose, it shows the source and destination paths and who handles each of the seven steps. [Migration walkthrough](docs/guide.en.md#steps)
 
+If you moved files by hand or paused midway, say **“Check where my previous migration stopped.”** The assistant inspects the source, destination, project settings, and chat evidence before asking which folders still need to move and where they should go. [Resume inspection](skills/ai-project-migration/references/resume.md)
+
 <a id="update"></a>
 
 ## How to update

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from batch_checks import ProjectBatchChecks
 from record_checks import RecordChecks
+from resume_checks import ResumeInspectionChecks
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "ai-project-migration" / "scripts"
 
@@ -107,7 +108,7 @@ def mounted(scratch, suffix, filesystem):
         disk.detach()
 
 
-class MacMigrationTests(ProjectBatchChecks, RecordChecks, unittest.TestCase):
+class MacMigrationTests(ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, unittest.TestCase):
     source_image = None
     target_image = None
 

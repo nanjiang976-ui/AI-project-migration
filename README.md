@@ -45,6 +45,8 @@ npx skills add nanjiang976-ui/AI-project-migration --skill ai-project-migration 
 
 没有指定项目时，第一句应是 **“你要迁移哪个本地项目？”** 确认项目后，助手会先给出源路径、目标路径和七步分工。[迁移七步](docs/guide.zh-CN.md#steps)
 
+手动搬过或迁移做到一半，可以说 **“先检查我上次迁移做到哪一步。”** 助手会只读核对原件、目标、项目设置和聊天证据，再询问剩余来源与目标。[中途接续检查](skills/ai-project-migration/references/resume.md)
+
 <a id="update"></a>
 
 ## 如何更新
