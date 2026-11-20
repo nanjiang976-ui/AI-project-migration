@@ -153,6 +153,10 @@ class ResumeInspectionChecks:
         self.assertEqual(set(rows), {self.old, secondary})
         self.assertEqual(rows[self.old]["state"], "review_source_entries")
         self.assertEqual(rows[secondary]["state"], "choose_target")
+        config = rows[secondary]["configuration"]
+        self.assertIs(config["shared"], True)
+        self.assertEqual({ref["project_id"]: ref["role"] for ref in config["references"]},
+                         {"demo": "secondary", "shared-owner": "primary"})
         # A new directory at the same target path cannot inherit old copy evidence.
         self.new.rename(self.new.with_name("prior-verified-target"))
         self.write_manual_target()
