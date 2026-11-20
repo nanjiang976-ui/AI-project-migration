@@ -47,7 +47,9 @@ Use the File Explorer address bar on Windows or `⌘⇧G` in Finder on macOS to 
 
 <a id="steps"></a>
 
-## The seven steps
+## The seven steps for a single folder
+
+Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.md) to move several selected source folders, or one folder shared by multiple projects. Confirm every reference and destination first. Copy each shared physical folder once, restore the old paths, then update each project. Resume a single-folder move already in progress from its original checkpoint.
 
 | Step | What the assistant does | What you do | What success looks like |
 |---|---|---|---|

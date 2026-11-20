@@ -14,10 +14,11 @@ from uuid import uuid4
 from _winapi import CreateJunction
 import migration_ntfs as nt
 import tree_copy
+from batch_checks import ProjectBatchChecks
 from record_checks import RecordChecks
 
 
-class MigrationTests(RecordChecks, unittest.TestCase):
+class MigrationTests(ProjectBatchChecks, RecordChecks, unittest.TestCase):
     @classmethod
     def configure(cls, scripts, source_run, target_run):
         cls.scripts = scripts

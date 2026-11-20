@@ -158,12 +158,16 @@ def current_progress(events):
     return step, completed_chat, pending
 
 
-def git_time_exceptions(run, old, target):
+def git_time_exceptions(run, old, target, *, batch=False):
     before = read(run / "git-before.json")
     if not before.get("ok") or before.get("root") != str(old):
         raise ValueError("缺少已确认的 Git 基准")
     if before["kind"] == "non_git":
         return set()
+    from git_check import verify
+    if batch:
+        verify(target, before["snapshot"])
+        return {".git/worktrees/" + tree["admin"] + "/gitdir" for tree in before["snapshot"]["linked"]}
     checks = []
     for path in run.glob("*.json"):
         if path.name in {"cutover-plan.json", "git-before.json", "run.json"}:
@@ -176,7 +180,6 @@ def git_time_exceptions(run, old, target):
     latest = max(checks, key=lambda item: item["utc"], default={})
     if latest.get("ok") is not True or latest.get("kind") != before["kind"]:
         raise ValueError("缺少成功的最新 Git 验收，或最新核验失败")
-    from git_check import verify
     verify(target, before["snapshot"])
     return {".git/worktrees/" + tree["admin"] + "/gitdir" for tree in before["snapshot"]["linked"]}
 
@@ -201,18 +204,29 @@ def check_current_manifest(root, manifest):
     return len(current)
 
 
-def cleanup_check(config, run, chat):
-    """Verify the final receipts and current contents before identifying any removable backup."""
+def verified_link(config, run):
     from cutover import state
     phase, old, target, backup = state(run / "cutover-plan.json")
     paths = (str(old), str(target), str(backup))
     if phase != "linked" or paths != (config["source"], config["target"], config["backup"]):
         raise ValueError("旧路径、目标或备份身份未经确认")
+    return old, target, backup
+
+
+def cleanup_check(config, run, chat):
+    """A standalone run can only approve cleanup of its own backup."""
+    if os.path.lexists(run / "batch-owner.json"):
+        raise ValueError("此目录属于多源批次，请使用批次验收核对所有引用项目后再判断备份")
     if not chat or chat["status"] not in ("passed", "not_applicable"):
         raise ValueError("旧会话核验尚有待处理项")
     if chat["status"] == "passed":
         read_probe(config, run, chat)
+    return verify_backup_files(config, run, chat["status"] == "passed")
 
+
+def verify_backup_files(config, run, probe_wrote, *, batch=False):
+    """Verify the final file receipts against current directory identities and contents."""
+    old, target, backup = verified_link(config, run)
     folder = run / "backup-check"
     marker = max(folder.glob("*-started.json"), default=None)
     if marker is None:
@@ -226,9 +240,11 @@ def cleanup_check(config, run, chat):
     diffs = comparison.get("differences")
     if comparison.get("status") not in ("passed", "differences") or not isinstance(diffs, dict):
         raise ValueError("最近一次备份核验未完成")
-    allowed_times = git_time_exceptions(run, old, target)
-    if chat["status"] == "passed":
+    allowed_times = git_time_exceptions(run, old, target, batch=batch)
+    if probe_wrote is True:
         allowed_times.add(".")
+    elif probe_wrote:
+        allowed_times.update(probe_wrote)
     if (set(diffs) - {"mtime_ns"} or set(diffs.get("mtime_ns", [])) - allowed_times
             or comparison.get("source_summary") != comparison.get("destination_summary")):
         raise ValueError("备份有独有内容、两边存在差异或发生了未解释的变更")

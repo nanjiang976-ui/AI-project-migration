@@ -66,7 +66,7 @@ If you haven't named a project, the assistant first asks **“Which local projec
 
 Keep the existing source list and choose which folder to move. If only your project uses the primary folder and you move just that folder, shared sources can stay in place. For example, `Demo` might use `SharedAssets` as a secondary source while `AssetLibrary` uses the same folder as its primary source. If you confirm the move, copy and verify the folder once, then update the corresponding entry in each project to the same destination, keeping its primary or secondary role. Codex saves source lists per project, so update each affected project separately.
 
-The skill prompts you to confirm source folders and shared references before copying. The current scripts handle one physical folder at a time. Coordinating settings for multiple sources or projects requires separate checks for each entry.
+The skill lists sources and shared references before copying. Select several physical folders in one batch, or move one shared folder and update the projects that reference it. After every copy passes verification, the batch restores the old paths, then switches and checks each project. Resume an existing single-folder move from its original checkpoint. [Codex batch workflow](skills/ai-project-migration/references/batch.md)
 
 ### How can I reclaim space on the original drive and keep old chats working with the migrated files?
 
