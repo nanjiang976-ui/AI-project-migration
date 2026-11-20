@@ -138,7 +138,9 @@ class ProjectBatchChecks:
         self.assertEqual((self.untouched / "notes.txt").read_bytes(), b"notes bytes")
         before_completion = self.verify_after_for("demo")
         self.accept_project("demo", before_completion)
-        self.accept_project("library", before_completion, success=False)
+        pending = json.loads(self.accept_project("library", before_completion))
+        self.assertEqual(pending["phase"], "needs_edit")
+        self.assertIsNone(pending["receipt"])
         status = {row["id"]: row for row in self.current_batch_status()["projects"]}
         self.assertTrue(status["demo"]["confirmed"])
         self.assertFalse(status["library"]["confirmed"])
