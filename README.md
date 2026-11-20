@@ -1,6 +1,6 @@
 # AI 项目迁移助手 · AI-project-migration
 
-[English](README.en.md) · [安装](#install) · [第一次使用](#first-run) · [如何更新](#update) · [完整指南](docs/guide.zh-CN.md)
+[English](README.en.md) · [安装](#install) · [第一次使用](#first-run) · [如何更新](#update) · [常见问题](#faq) · [完整指南](docs/guide.zh-CN.md)
 
 项目盘快满了，旧聊天还要接着改文件？这个 Skill 帮你把本地项目搬到同一台电脑的另一块盘。它会核对副本，在原位置留下通往新目录的链接，并实际检查旧聊天能否读写新位置的文件。
 
@@ -58,4 +58,18 @@ npx skills add nanjiang976-ui/AI-project-migration --skill ai-project-migration 
 > [!CAUTION]
 > **⚠️ 请勿删除原位置下的原名文件夹。** 它是旧聊天访问新项目的入口。进入其中删除文件会直接影响目标盘上的项目。只有最终验收通过后，才可手动清理报告指明的 `_迁移备份` 实体目录。
 
-[完整指南](docs/guide.zh-CN.md) · [兼容性与实测记录](docs/guide.zh-CN.md#compatibility) · [常见问题](docs/guide.zh-CN.md#faq) · [反馈问题](https://github.com/nanjiang976-ui/AI-project-migration/issues) · [MIT 许可证](LICENSE)
+<a id="faq"></a>
+
+## 常见问题（FAQ）
+
+### Codex 项目有多个源文件夹，需要先移除其他来源吗？迁移共享目录时，其他项目会一起更新吗？
+
+保留原有的源列表，先选本次要搬的目录。只迁本项目独有的主目录时，共享来源可以留在原位。假设 `Demo` 把 `SharedAssets` 设为次要源，`AssetLibrary` 把同一目录设为主要源。若确认迁移这份共享目录，只复制和校验一次，然后分别将两个项目的对应条目指向同一个新路径，各自保留原来的主次角色。Codex 按项目保存源列表，编辑其中一个项目时，其他项目仍需分别同步。
+
+Skill 会在复制前提示确认来源和共享范围。现有脚本一次处理一个实体目录，多源或跨项目的配置需要另外核对并分步处理。
+
+### 怎样腾出原盘空间，同时让相关旧聊天继续访问迁移后的文件？
+
+验收通过后，手动清理原盘的实体备份。保留原名入口，也就是 Windows 的目录联接或 macOS 的目录符号链接，旧聊天仍可通过原地址访问目标盘。逐条核对相关旧聊天的原 ID、历史和工作目录，再从每个受影响项目中选择代表性旧聊天，对其涉及的已迁目录实际读写。报告分开记录逐条核对的数量和实际读写的范围。只要目录或聊天仍待核验，就保留对应备份。
+
+[完整指南](docs/guide.zh-CN.md) · [兼容性与实测记录](docs/guide.zh-CN.md#compatibility) · [更多常见问题](docs/guide.zh-CN.md#faq) · [反馈问题](https://github.com/nanjiang976-ui/AI-project-migration/issues) · [MIT 许可证](LICENSE)
