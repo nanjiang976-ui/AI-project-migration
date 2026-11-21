@@ -302,22 +302,22 @@ class MigrationTests(ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, u
         self.assertLessEqual(set(verify_out.get("mtime_ns", [])), {".", f".git/worktrees/{admin}/gitdir"})
         end = mark(7)
         self.assertIsNone(end["next_step"])
-        self.assert_cleanup(end, True)
-        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), True)
+        self.assert_cleanup(end, True, linked=True)
+        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), True, linked=True)
 
         # A failed *later* check supersedes an earlier green Git receipt.
         extra = linked / "after-completion.txt"
         extra.write_bytes(b"new external work")
         self.helper("git_check", "verify", self.new, "--baseline", before,
                     "--out", self.audit / "final-later-failure.json", success=False)
-        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), False)
+        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), False, linked=True)
         extra.rename(self.left / "preserved-extra.txt")
         self.helper("git_check", "verify", self.new, "--baseline", before,
                     "--out", self.audit / "final-later-success.json")
 
         # A historical clean backup report cannot authorize deletion of new data.
         (self.backup / "saved-after-completion.txt").write_bytes(b"unique backup data")
-        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), False)
+        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), False, linked=True)
 
     def command_for_final_comparison(self):
         cmd = [sys.executable, "-B", self.scripts / "tree_copy.py", "verify", self.backup, self.new,

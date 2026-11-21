@@ -376,6 +376,8 @@ class ProjectBatchChecks:
         initial = self.batch_cleanup_status(readback)
         self.assertTrue(initial[primary_id]["eligible"], initial[primary_id])
         self.assertFalse(initial[shared_id]["eligible"], initial[shared_id])
+        reassurance = "请放心，保留这个入口几乎不占用硬盘空间。"
+        self.assertIn(reassurance, initial[shared_id]["warning"])
 
         library_request = str(uuid4())
         self.register_probe("library", self.shared, "library-old", library_request)
@@ -384,6 +386,7 @@ class ProjectBatchChecks:
         self.verify_batch_backup(self.shared)
         complete = self.batch_cleanup_status(readback)
         self.assertTrue(complete[shared_id]["eligible"], complete[shared_id])
+        self.assertIn(reassurance, complete[shared_id]["warning"])
         self.assertEqual([p.name for p in self.shared_new.iterdir()], ["shared.txt"])
         changed_scope = self.load_evidence(readback)
         changed_scope["projects"].append({"id": "new-reference", "name": "NewReference", "sources": [

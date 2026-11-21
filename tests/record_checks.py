@@ -10,11 +10,18 @@ class RecordChecks:
                                       "--status", status, "--evidence", "synthetic fixture",
                                       "--next-action", "continue fixture verification"))
 
-    def assert_cleanup(self, report, eligible):
+    def assert_cleanup(self, report, eligible, *, linked=False):
         self.assertEqual(next(iter(report)), "cleanup_notice")
         notice = report["cleanup_notice"]
         self.assertIn("请勿删除", notice["warning"])
         self.assertIn(str(self.old), notice["warning"])
+        reassurance = "请放心，保留这个入口几乎不占用硬盘空间。"
+        if linked:
+            self.assertIn(reassurance, notice["warning"])
+            kind = "Windows 目录联接" if os.name == "nt" else "macOS 目录符号链接"
+            self.assertIn(kind, notice["warning"])
+        else:
+            self.assertNotIn(reassurance, notice["warning"])
         self.assertIn(str(self.new), notice["target"])
         self.assertEqual(notice["backup"], str(self.backup))
         self.assertIs(notice["eligible"], eligible)

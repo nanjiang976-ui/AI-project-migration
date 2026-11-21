@@ -68,7 +68,7 @@ Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.m
 ## Which folder should I keep?
 
 > [!CAUTION]
-> **⚠️ Keep the folder entry at the original project path.** Removing it breaks the old address. Deleting files *inside* that folder can delete active files on the destination drive.
+> **⚠️ Keep the folder entry at the original project path.** Keeping this link takes up almost no disk space. Removing it breaks the old address. Deleting files *inside* that folder can delete active files on the destination drive.
 
 ```text
 Windows example

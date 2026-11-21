@@ -236,6 +236,16 @@ def read_plan(filename):
     return data, source, target, backup
 
 
+def verify_link_target(source, target):
+    expected_type = source.is_symlink() if sys.platform == "darwin" else source.is_junction()
+    require(expected_type and source.samefile(target), f"原路径的链接类型或目标不符：{source}")
+    # samefile can pass via a second link. Require the declared target itself.
+    named_target = os.readlink(source)
+    if os.name == "nt" and (named_target.startswith("\\\\?\\") or named_target.startswith("\\??\\")):
+        named_target = named_target[4:]
+    require(Path(named_target) == target, f"联接目标不是计划中的准确路径：{named_target}")
+
+
 def observe(data, source, target, backup):
     old = stat_if_present(source)
     saved = stat_if_present(backup)
@@ -245,13 +255,7 @@ def observe(data, source, target, backup):
         require(saved is not None, f"找不到经记录的原件或备份：{backup}")
         return "renamed"
     if reparse(old):
-        expected_type = source.is_symlink() if sys.platform == "darwin" else source.is_junction()
-        require(expected_type and source.samefile(target), f"原路径的链接类型或目标不符：{source}")
-        # samefile can pass via a second link. Require the declared target itself.
-        named_target = os.readlink(source)
-        if os.name == "nt" and (named_target.startswith("\\\\?\\") or named_target.startswith("\\??\\")):
-            named_target = named_target[4:]
-        require(Path(named_target) == target, f"联接目标不是计划中的准确路径：{named_target}")
+        verify_link_target(source, target)
         require(saved is not None, f"联接存在，但找不到备份以完成本次清理前验收：{backup}")
         return "linked"
     require(real_dir(source) == data["source_id"], f"源盘或原项目的系统标识与准备时不符：{source}")

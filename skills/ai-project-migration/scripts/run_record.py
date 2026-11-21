@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from uuid import UUID, uuid4
 
-from cutover import MigrationError, save_exclusive
+from cutover import MigrationError, local_path, real_dir, save_exclusive, verify_link_target
 
 
 FINISHED = {"passed", "not_applicable", "unverified"}
@@ -258,11 +258,21 @@ def verify_backup_files(config, run, probe_wrote, *, batch=False):
 
 def notice(config, eligible, reason):
     old, new, backup = (config[k] for k in ("source", "target", "backup"))
-    kind = "目录联接" if os.name == "nt" else "目录符号链接"
+    warning = f"⚠️ 请勿删除原位置下的原名文件夹：{old}"
+    try:
+        target_path = local_path(new)
+        verify_link_target(local_path(old), target_path)
+        real_dir(target_path)
+    except (MigrationError, OSError, ValueError):
+        pass
+    else:
+        kind = "Windows 目录联接" if os.name == "nt" else "macOS 目录符号链接"
+        warning += (f"\n这里是通往项目新位置的{kind}，旧聊天仍可通过它访问项目。"
+                    "请放心，保留这个入口几乎不占用硬盘空间。"
+                    "删除入口会使旧路径失效。进入其中删除文件会直接影响目标盘上的项目文件。")
     backup_message = (f"验收通过后可手动清理的实体备份：{backup}" if eligible
                       else f"⛔ 暂勿清理备份：{backup}")
-    return dict(warning=f"⚠️ 请勿删除原位置下的原名文件夹：{old}（{kind}）。删除入口会让旧路径失效；"
-                        "旧聊天通过它访问新地址，进入后删除内容会直接影响目标实体。",
+    return dict(warning=warning,
                 target=new, target_message=f"正在使用的项目实体，必须保留：{new}",
                 backup=backup, eligible=eligible, backup_message=backup_message + "。" + reason)
 

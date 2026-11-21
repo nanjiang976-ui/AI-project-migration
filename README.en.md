@@ -116,7 +116,7 @@ $ai-project-migration Run the final verification and report the results for proj
 - **ZIP installation:** Download the new ZIP, keep the previous installation outside the skills directory, and copy the complete new folder into its original location. Restart your agent and check the invocation above. If you customized any files, compare and preserve your edits first.
 
 > [!CAUTION]
-> **⚠️ Keep the folder entry at the original project path.** Old chats use it to reach the new files. Opening that folder and deleting its contents affects the active project on the destination drive. After final verification, only the physical `_迁移备份` backup identified in the report is eligible for manual removal.
+> **⚠️ Keep the folder entry at the original project path.** Keeping this link takes up almost no disk space. Old chats use it to reach the new files. Opening that folder and deleting its contents affects the active project on the destination drive. After final verification, only the physical `_迁移备份` backup identified in the report is eligible for manual removal.
 
 <a id="faq"></a>
 

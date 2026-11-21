@@ -307,7 +307,9 @@ class MacMigrationTests(ProjectBatchChecks, RecordChecks, ResumeInspectionChecks
         diffs = info["differences"]
         self.assertLessEqual(set(diffs), {"mtime_ns"})
         self.assertLessEqual(set(diffs.get("mtime_ns", [])), {".", f".git/worktrees/{admin}/gitdir"})
-        self.assert_cleanup(self.mark_fixture(7), True)
+        self.assert_cleanup(self.mark_fixture(7), True, linked=True)
+        final = json.loads(self.helper("run_record", "show", "--run", self.audit))
+        self.assert_cleanup(final, True, linked=True)
 
 
 def main():
