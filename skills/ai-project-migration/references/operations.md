@@ -11,10 +11,12 @@
 | 核对真实路径后 | `run_record.py volumes OLD NEW`。读取两边的系统标识和文件系统，判断是否在同一个盘。macOS 按已挂载 APFS 盘的 Volume UUID 识别；目标外接盘断开时停止，避免在原挂载位置创建副本 |
 | 用户确认源盘、目标盘和路径后 | `run_record.py start OLD NEW --host HOST --run RUN`。HOST 取本次项目/旧会话的所属宿主 `codex`、`claude-code` 或 `generic`。Codex 还须传真实 `--project-id ID`；其他宿主无原生 ID 时用独立 migration_id 关联本次运行。预先创建专用审计父目录 |
 | 源和目标位于同一个盘时 | 先告知“这次移动不会释放这个盘的空间”；只有用户明确选择在同一个盘里整理文件，才在 start 中添加 `--allow-same-volume` |
-| 每步结束或暂停 | `run_record.py mark --run RUN --step N --status STATUS --evidence "结果和证据位置" --next-action "下一步由谁做"`。STATUS 可为 passed、waiting、blocked。仅步骤 6 可用 not_applicable（已确认没有适用旧聊天）或 unverified（无法取得真实证据，继续列出最终缺口并保留备份） |
+| 每步结束或暂停 | `run_record.py mark --run RUN --step N --status STATUS --evidence "结果和证据位置" --next-action "下一步由谁做、怎么做"`。STATUS 可为 passed、waiting、blocked。仅步骤 6 可用 not_applicable（已确认没有适用旧聊天）或 unverified（无法取得真实证据，继续列出最终缺口并保留备份） |
 | 重开后 | `run_record.py show --run RUN`。旧 Windows 检查点也应读回；核实实际路径、实体、配置和既有回执再接续 |
 
 检查点顺序追加。实际操作成功但没来得及记录时，先验证并补登，不重复改名或发送消息。已通过的步骤发生变化，用 `run_record.py reopen --run RUN --step N --evidence "发现的变化" --next-action "修复和复核"` 使相关阶段重新待核。确需更换有冲突的候选时，保留旧运行记录并给新候选独立的所有权记录。不要编辑 owner.json 或计划文件强行认可替换过的实体。
+
+用最新核验结果判断当前卡点。若命令将第 7 步记为 `blocked`，或 `show` 发现新差异，结合返回的 `verification_error`（如有）和最新差异报告，按实际缺口确定接下来的动作，依[阶段汇报与接续](../SKILL.md#阶段汇报与接续)直接告诉用户。
 
 ## 步骤 1–3 · 保全与复制
 
@@ -56,7 +58,7 @@ cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-c
 
 确认备份实体和链接身份后，再运行 `tree_copy.py verify BACKUP NEW --audit RUN/backup-check`。Git 项目运行 `git_check.py verify NEW --baseline RUN/git-before.json --out RUN/git-final.json`。输出用新文件名保留每次尝试。列出备份独有、目标独有、内容、元数据及硬链接差异。只对已查证的探针根目录 mtime、Git 修复触及的特定反向指针 mtime 单独说明，逐项核对哈希和实际回执，不整体豁免 .git。对迁移后新编辑的文件保全新版、解释差异；备份有独有内容或存在未解释变化，保留原件并指出具体差异。
 
-最终报告包括历史读取覆盖、恢复的原会话 ID 与实际双向测试范围、Git 工作树和源盘备份。读写测试和历史读取的计数分列；未验证栏写出原因。收尾和再次查看完成记录都读取 `run_record.py show` 的 `cleanup_notice`，**先展示 `warning` 中的旧路径警示及完整路径**。已确认入口直达目标时，保留回执中的实际链接类型、空间说明和删除风险。下一行显示必须保留的目标实体，再列备份实体的实际路径。未达到条件必用 **“⛔ 暂勿清理备份”**；只有验收通过，才提示用户可手动清理备份。审计文件保存在本机。
+最终报告包括历史读取覆盖、恢复的原会话 ID 与实际双向测试范围、Git 工作树和源盘备份。读写测试和历史读取的计数分列；未验证栏写出原因。收尾和再次查看完成记录都读取 `run_record.py show` 的 `cleanup_notice`，**先展示 `warning` 中的旧路径警示及完整路径**。已确认入口直达目标时，保留回执中的实际链接类型、空间说明和删除风险。下一行显示必须保留的目标实体，再列备份实体的实际路径。未达到条件必用 **“⛔ 暂勿清理备份”**，同一条消息说明卡住的验收项和复验条件，并交代由谁完成下一项核对；只有验收通过，才提示用户可手动清理备份。审计文件保存在本机。
 
 ## 中断与回退
 
