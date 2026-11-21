@@ -15,6 +15,7 @@ import unittest
 from uuid import uuid4
 
 from batch_checks import ProjectBatchChecks
+from preflight_checks import PreflightChecks
 from record_checks import RecordChecks
 from resume_checks import ResumeInspectionChecks
 
@@ -108,7 +109,7 @@ def mounted(scratch, suffix, filesystem):
         disk.detach()
 
 
-class MacMigrationTests(ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, unittest.TestCase):
+class MacMigrationTests(PreflightChecks, ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, unittest.TestCase):
     source_image = None
     target_image = None
 
@@ -261,12 +262,16 @@ class MacMigrationTests(ProjectBatchChecks, RecordChecks, ResumeInspectionChecks
         paste = self.prepare("auto")
         self.target_image.detach()
         try:
+            report = self.run_preflight("--resume", "--source", self.old, "--target", self.new, success=False)
+            self.assertEqual(self.preflight_status(report, "volumes"), "blocked", report)
             self.helper("cutover", "status", "--plan", self.plan, fail=True)
             self.helper("cutover", "apply", "--plan", self.plan, "--mode", "auto", fail=True)
             self.assertFalse(self.backup.exists())
             self.assertFalse(self.new.exists())
         finally:
             self.target_image.attach()
+        report = self.run_preflight("--resume", "--source", self.old, "--target", self.new)
+        self.assertEqual(self.preflight_status(report, "volumes"), "passed", report)
         self.command(["/bin/sh", "-c", paste])
         self.assertTrue(self.old.samefile(self.new))
 

@@ -61,7 +61,7 @@ npx skills add nanjiang976-ui/AI-project-migration --skill ai-project-migration 
 $ai-project-migration 请引导我迁移一个本地项目。先帮我确认项目、源目录和目标位置，等我确认后再开始复制。
 ```
 
-助手会先问「你要迁移哪个本地项目？」确认后，会展示完整路径、迁移步骤和哪些动作需要你操作。[迁移七步](docs/guide.zh-CN.md#steps)
+助手会先问「你要迁移哪个本地项目？」确认后会展示完整路径、迁移步骤和需要你操作的动作。迁移前会检查本机环境和源、目标盘，只在 Git 项目中检查 Git。缺少工具或版本不符时会先说明安装方式，等你明确同意并复检通过后才继续。 [迁移七步](docs/guide.zh-CN.md#steps)
 
 ### 2. 已经知道要搬哪个项目、搬到哪里
 

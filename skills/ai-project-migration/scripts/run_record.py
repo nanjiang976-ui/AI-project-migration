@@ -36,15 +36,17 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def volumes(old, new):
+def volume_id(path):
     if sys.platform == "darwin":
         import mac_fs
-        source, target = (mac_fs.volume(p) for p in (old, new))
-    else:
-        import migration_ntfs as nt
-        for path in (old, new):
-            nt.volume(path)
-        source, target = (nt.physical(p).drive.casefold() for p in (old, new))
+        return mac_fs.volume(path)
+    import migration_ntfs as nt
+    nt.volume(path)
+    return nt.physical(path).drive.casefold()
+
+
+def volumes(old, new):
+    source, target = (volume_id(path) for path in (old, new))
     same = source == target
     message = "这次移动不会释放这个盘的空间。确认仍要整理目录后再继续。" if same else "源和目标位于不同的本地盘。"
     return dict(source_volume=source, target_volume=target, same_volume=same, message=message)

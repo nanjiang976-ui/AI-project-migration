@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -13,6 +14,10 @@ from datetime import datetime, timezone
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+class GitCommandError(ValueError):
+    """Git was found, but refused a command."""
 
 
 def physical(path, directory=True):
@@ -34,19 +39,47 @@ def identity(path):
     return [info.st_dev, info.st_ino]
 
 
-def git(root, *args, overrides=(), soft=False):
+def git_program():
+    name = "git.exe" if os.name == "nt" else "git"
+    program = shutil.which(name)
+    if not program:
+        raise FileNotFoundError("Git is not available on the current PATH")
+    path = Path(program).absolute()
+    if sys.platform == "darwin" and path.resolve() == Path("/usr/bin/git"):
+        # Invoking the system dispatcher without developer tools can open an
+        # installer. Use the selected toolchain's installed Git directly.
+        directory = os.environ.get("DEVELOPER_DIR")
+        if not directory:
+            selected = subprocess.run(["/usr/bin/xcode-select", "--print-path"],
+                                      stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            directory = os.fsdecode(selected.stdout).rstrip("\r\n") if selected.returncode == 0 else ""
+        developer = Path(directory)
+        if developer.suffix.lower() == ".app":
+            developer = developer / "Contents" / "Developer"
+        candidate = developer / "usr" / "bin" / "git"
+        if not developer.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise FileNotFoundError("Apple Git requires installed and selected developer tools")
+        path = candidate.resolve()
+        if path == Path("/usr/bin/git"):
+            raise FileNotFoundError("Selected Apple toolchain resolves to the Git installer dispatcher")
+    return path
+
+
+def git(root, *args, overrides=(), soft=False, program=None, timeout=None):
     env = os.environ.copy()
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"):
         env.pop(key, None)
     env.update(GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", GIT_NO_LAZY_FETCH="1")
-    cmd = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+    cmd = [str(program if program is not None else git_program()),
+           "--no-optional-locks", "-c", "core.fsmonitor=false",
            "-c", "core.quotepath=false", "-C", str(root), *overrides, *args]
-    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env)
+    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=timeout)
     if soft and result.returncode == 1:
         return b""
-    require(result.returncode == 0,
-            f"Git failed in {root}: {result.stderr.decode(errors='replace').strip()}")
+    if result.returncode:
+        reason = result.stderr.decode(errors="replace").strip()
+        raise GitCommandError(f"Git failed in {root}: {reason}")
     return result.stdout
 
 
@@ -62,7 +95,7 @@ def pointer(file, prefix=b""):
     return Path(os.path.abspath(file.parent / os.fsdecode(raw[len(prefix):])))
 
 
-def is_main(root):
+def has_main_marker(root):
     dot = root / ".git"
     if not os.path.lexists(dot):
         for parent in [root, *root.parents]:
@@ -72,6 +105,13 @@ def is_main(root):
         return False
     require(dot.is_dir(), f"Choose the main checkout, or inspect a separate Git directory: {dot}")
     physical(dot)
+    return True
+
+
+def is_main(root):
+    if not has_main_marker(root):
+        return False
+    dot = root / ".git"
     top = as_path(git(root, "rev-parse", "--show-toplevel"))
     common = as_path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     require(top == root and common == dot, f"Project is not an independent main checkout: {root}")
