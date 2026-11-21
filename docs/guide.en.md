@@ -31,7 +31,7 @@ If Claude Code guides the move of a project whose chats belong to Codex, those c
 
 ## Where to put a manual installation
 
-[Download the ZIP](https://github.com/nanjiang976-ui/AI-project-migration/archive/refs/heads/main.zip) and choose **Extract All** on Windows, or double-click it in Finder on macOS. Inside the extracted repository locate `skills/ai-project-migration`. Copy the **whole** folder into a stable personal skills directory outside the project you intend to move.
+Open the [latest GitHub release](https://github.com/nanjiang976-ui/AI-project-migration/releases/latest) and select **Source code (zip)** under **Assets**. On Windows, right-click the ZIP and choose **Extract All**. On macOS, double-click it in Finder. Inside the extracted repository locate `skills/ai-project-migration`. Copy the **whole** folder into a stable personal skills directory outside the project you intend to move.
 
 | Agent | Installed folder on Windows | Installed folder on macOS |
 |---|---|---|

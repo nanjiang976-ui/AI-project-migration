@@ -31,7 +31,7 @@ Windows 跨盘测试使用同一块 SSD 上的两个独立 NTFS 分区。macOS �
 
 ## 手动安装时应该放在哪里？
 
-[下载 ZIP](https://github.com/nanjiang976-ui/AI-project-migration/archive/refs/heads/main.zip)，在 Windows 右键“全部解压缩”，或在 macOS 用访达双击解压。进入解压后的仓库，找到 `skills/ai-project-migration`。复制**整个**文件夹，放到一个稳定的个人技能目录，避免放在准备搬走的项目里。
+打开 [GitHub 最新 Release 页面](https://github.com/nanjiang976-ui/AI-project-migration/releases/latest)，在 **Assets** 中选择 **Source code (zip)**。在 Windows 右键“全部解压缩”，或在 macOS 用访达双击解压。进入解压后的仓库，找到 `skills/ai-project-migration`。复制**整个**文件夹，放到一个稳定的个人技能目录，避免放在准备搬走的项目里。
 
 | Agent | Windows 安装完成后的文件夹 | macOS 安装完成后的文件夹 |
 |---|---|---|

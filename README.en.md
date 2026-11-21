@@ -46,7 +46,7 @@ npx skills add nanjiang976-ui/AI-project-migration --skill ai-project-migration 
 
 **③ Download a ZIP**
 
-[Download the ZIP](https://github.com/nanjiang976-ui/AI-project-migration/archive/refs/heads/main.zip), extract it, and copy the entire `skills/ai-project-migration` folder to your agent's personal skills directory. Check that you can open `ai-project-migration/SKILL.md` directly, then restart the agent. [Installation paths by host](docs/guide.en.md#zip)
+Open the [latest GitHub release](https://github.com/nanjiang976-ui/AI-project-migration/releases/latest) and select **Source code (zip)** under **Assets**. Extract the ZIP and copy the entire `skills/ai-project-migration` folder to your agent's personal skills directory. Check that you can open `ai-project-migration/SKILL.md` directly, then restart the agent. [Installation paths by host](docs/guide.en.md#zip)
 
 <a id="first-run"></a>
 <a id="usage"></a>
