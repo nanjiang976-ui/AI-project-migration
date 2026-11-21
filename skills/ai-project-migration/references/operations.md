@@ -1,6 +1,6 @@
 # 文件复制、离线切换与接续
 
-脚本均位于已安装 Skill 的 `scripts` 目录，使用本机 CPython 3.12+ 和 `-B`。以下是给执行助手的调用约定。把占位符换成本次完整路径，作为独立参数传递。给用户的离线命令使用 `cutover.py prepare` 的实际输出。普通检查从项目树外启动；**旧聊天读写探针必须继承选定会话的默认工作目录**。
+脚本均位于已安装 Skill 的 `scripts` 目录。先做[迁移环境预检](preflight.md)，然后用通过检查的本机 CPython 绝对路径和 `-B` 运行以下 Python 脚本。把占位符换成本次完整路径，作为独立参数传递。给用户的离线命令使用 `cutover.py prepare` 的实际输出。普通检查从项目树外启动，**旧聊天读写探针必须继承选定会话的默认工作目录**。
 
 ## 运行目录与恢复
 
@@ -8,10 +8,10 @@
 
 | 时机 | 调用 |
 |---|---|
-| 核对真实路径后 | `run_record.py volumes OLD NEW`。读取两边的系统标识和文件系统，判断是否在同一个盘。macOS 按已挂载 APFS 盘的 Volume UUID 识别；目标外接盘断开时停止，避免在原挂载位置创建副本 |
-| 用户确认源盘、目标盘和路径后 | `run_record.py start OLD NEW --host HOST --run RUN`。HOST 取本次项目/旧会话的所属宿主 `codex`、`claude-code` 或 `generic`。Codex 还须传真实 `--project-id ID`；其他宿主无原生 ID 时用独立 migration_id 关联本次运行。预先创建专用审计父目录 |
+| 核对真实路径后 | `preflight.py --source OLD --target NEW` 检查两端环境、卷标识和文件系统。读回 `volumes` 检查中的 `same_volume` 判断是否同盘。目标外接盘断开时停止，避免在原挂载位置创建副本 |
+| 预检通过且用户确认源盘、目标盘和路径后 | `run_record.py start OLD NEW --host HOST --run RUN`。HOST 取本次项目或旧会话的所属宿主 `codex`、`claude-code` 或 `generic`。Codex 还须传真实 `--project-id ID`，其他宿主无原生 ID 时用独立 migration_id 关联本次运行。预先创建专用审计父目录 |
 | 源和目标位于同一个盘时 | 先告知“这次移动不会释放这个盘的空间”；只有用户明确选择在同一个盘里整理文件，才在 start 中添加 `--allow-same-volume` |
-| 每步结束或暂停 | `run_record.py mark --run RUN --step N --status STATUS --evidence "结果和证据位置" --next-action "下一步由谁做"`。STATUS 可为 passed、waiting、blocked。仅步骤 6 可用 not_applicable（已确认没有适用旧聊天）或 unverified（无法取得真实证据，继续列出最终缺口并保留备份） |
+| 运行记录已建立后，每步结束或暂停 | `run_record.py mark --run RUN --step N --status STATUS --evidence "结果和证据位置" --next-action "下一步由谁做"`。首次预检阻塞时只在聊天中报告。STATUS 可为 passed、waiting、blocked。仅步骤 6 可用 not_applicable（已确认没有适用旧聊天）或 unverified（无法取得真实证据，继续列出最终缺口并保留备份） |
 | 重开后 | `run_record.py show --run RUN`。旧 Windows 检查点也应读回；核实实际路径、实体、配置和既有回执再接续 |
 
 检查点顺序追加。实际操作成功但没来得及记录时，先验证并补登，不重复改名或发送消息。已通过的步骤发生变化，用 `run_record.py reopen --run RUN --step N --evidence "发现的变化" --next-action "修复和复核"` 使相关阶段重新待核。确需更换有冲突的候选时，保留旧运行记录并给新候选独立的所有权记录。不要编辑 owner.json 或计划文件强行认可替换过的实体。

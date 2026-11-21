@@ -30,6 +30,7 @@ The [macOS workflow](../.github/workflows/macos-apfs.yml) runs these tests on a 
 
 | Real filesystem or Git checks | What is verified |
 |---|---|
+| Environment preflight | Native shells and Python paths, Windows Store alias avoidance, Apple Git dispatcher handling, Git presence and worktree capability, unavailable target locations, APFS detach/remount, and read-only recovery from an existing checkpoint. No installer is run. |
 | Project copy | Empty directories, hidden/read-only files, NTFS named streams and hardlink identity. Extra target data and modified or unsupported source data are detected. |
 | Manual and automatic cutover | A user-renamed backup, scripted rename, actual directory lock, name collision, wrong junction, replaced target, failed verification and interrupted creation. |
 | Old-directory probe | The packaged script writes and reads in both directions from the synthetic old working directory; an incorrect working directory and a reused request ID are refused. |

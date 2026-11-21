@@ -61,7 +61,7 @@ After installing, send a prompt to your agent. The examples below use **Codex**.
 $ai-project-migration Guide me through moving a local project. Help me confirm the project, source folder, and destination, then wait for my confirmation before copying.
 ```
 
-The assistant first asks **“Which local project do you want to migrate?”** Once you confirm, it shows the full paths, the steps, and which actions are yours. [Migration walkthrough](docs/guide.en.md#steps)
+The assistant first asks **“Which local project do you want to migrate?”** Once you confirm, it shows the full paths, the steps and the actions you need to take. It checks the local environment and both volumes before moving the project. It checks Git only for Git projects. If a tool is missing or incompatible, it explains how it would install it, waits for your explicit approval, then repeats the checks before resuming. [Migration walkthrough](docs/guide.en.md#steps)
 
 ### 2. You know the project and destination
 

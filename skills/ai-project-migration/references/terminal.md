@@ -8,7 +8,7 @@
 
 | 系统 | 文字步骤 | 图示 |
 |---|---|---|
-| Windows | 按 `Windows 徽标键 + R` 打开「运行」，输入 `powershell.exe` 后按 `Enter`。在新打开的 PowerShell 窗口中，把命令粘贴到 `PS …>` 提示符后，再按 `Enter`。 | [打开 PowerShell](../assets/open-terminal-windows.png) |
+| Windows | 按 `Windows 徽标键 + R` 打开「运行」，启动通过预检的 Windows PowerShell 5.1 或 PowerShell 7。助手应给出已核实可用的命令 `powershell.exe`、`pwsh.exe` 或对应的完整路径。打开独立窗口后，把命令粘贴到 `PS …>` 提示符后，再按 `Enter`。 | [打开 PowerShell](../assets/open-terminal-windows.png) |
 | macOS | 按 `⌘ + 空格` 打开「聚焦」，搜索 `Terminal`（终端），选中终端应用后按 `Return`。在新打开的终端窗口中，把命令粘贴到提示符后，再按 `Return`。 | [打开终端](../assets/open-terminal-macos.png) |
 
 <a id="offline-cutover"></a>

@@ -23,9 +23,13 @@ If Claude Code guides the move of a project whose chats belong to Codex, those c
 
 ### Before moving a project
 
-- **Windows:** Use local NTFS source and destination drives, CPython 3.12+ and Windows PowerShell 5.1 or PowerShell 7. Check Python with `python --version`.
-- **macOS:** Both APFS drives must be locally mounted and writable, with ownership enabled. Have Terminal and CPython 3.12+ available (`python3 --version`). Keep an external destination connected when using the migrated project.
-- **Git projects:** Check `git --version`. Save open files and pause tasks that may write to the project. Choose an unused destination project folder name and allow enough free space for a complete copy. Moving within one drive won't free space on that drive, so the assistant asks whether to proceed.
+- **Windows** requires local NTFS drives, CPython 3.12 or later, and Windows PowerShell 5.1 or PowerShell 7.
+- **macOS** requires Terminal, CPython 3.12 or later, and locally mounted, writable APFS drives with ownership enabled. Keep an external destination connected.
+- **Git projects** also require Git to be callable from the local migration environment. The check is skipped for other projects.
+
+The assistant runs the applicable checks before moving a project. If a tool is missing or incompatible, it explains what's missing, how it would install the tool and what would change. It waits for your explicit approval before installing. If you need to install it yourself, the assistant links to the official instructions. The check must pass after installation before the move can continue. If a volume fails the check, follow the instructions to reconnect it, correct permissions or choose a different location. [Preflight and installation procedures](../skills/ai-project-migration/references/preflight.md)
+
+Save open files and pause tasks that may write to the project. For a new move, choose an unused destination folder name and allow enough space for a complete copy. Moving within one drive won't free space on that drive, so the assistant asks whether to proceed.
 
 <a id="zip"></a>
 
@@ -53,7 +57,7 @@ Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.m
 
 | Step | What the assistant does | What you do | What success looks like |
 |---|---|---|---|
-| 1. Identify | Checks the chat-owning host, both paths and available space; records chat and Git baselines | Choose the project and destination, save open files, pause writes | Both parties can identify the project and what needs verifying |
+| 1. Identify | Checks the local environment, both paths and available space, then records chat and applicable Git baselines | Choose the project and destination, save open files, pause writes, and choose an installation method if a tool is missing | Preflight passes and both parties agree on what will move and what needs verification |
 | 2. Copy | Copies the full project, including hidden and uncommitted files, and keeps the original | Usually nothing | A destination copy and an independent copy receipt exist |
 | 3. Verify | Checks file SHA-256 hashes, empty directories, hard links, permissions and system metadata | Stop further writes if the source is still changing | The strict comparison passes |
 | 4. Use the destination | Updates the original Codex project or checks that a fresh session starts at the new location; verifies Git worktree links | Follow the host-specific steps when the assistant cannot perform them directly | New work uses the destination and the project/worktrees match their baseline |
