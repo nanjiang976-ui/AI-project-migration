@@ -125,6 +125,9 @@ exit $LASTEXITCODE
 
     def test_preflight_git_project_needs_callable_git(self):
         self.git(self.old, "init", "-q")
+        # Keep this fixture stable while comparing its complete Git metadata.
+        self.git(self.old, "config", "--local", "maintenance.auto", "false")
+        self.git(self.old, "config", "--local", "gc.auto", "0")
         self.git(self.old, "add", ".")
         self.git(self.old, "commit", "-qm", "fixture")
         empty_path = self.new.parent / "empty-path"
