@@ -1,0 +1,28 @@
+# AI-project-migration 项目协作说明
+
+## 项目目的
+
+本仓库维护 `ai-project-migration` Skill，帮助用户在同一台电脑上把本地项目搬到选定位置。它先复制并独立校验项目，再保留原路径入口，让新会话从目标目录开始，旧会话仍能访问项目文件。常见场景包括原盘空间不足、Codex 项目有多个来源或共享目录，以及手动搬迁后需要继续验收。
+
+适用环境为 Windows 本地 NTFS 或 macOS 本地已挂载、可写且已启用所有权的 APFS。脚本需要 CPython 3.12+，Git 项目另需 Git。支持 Codex、Claude Code 和能执行本地命令的 Agent，旧会话由其所属宿主核验。
+
+## 维护入口
+
+- 修改迁移流程或交互时，先读 [SKILL.md](skills/ai-project-migration/SKILL.md)。该目录也是完整的 Skill 安装单元。
+- 修改复制、独立校验、离线切换、Git 工作树或检查点时，查阅 [执行手册](skills/ai-project-migration/references/operations.md) 和 [Python 脚本](skills/ai-project-migration/scripts/)。
+- 处理 Codex 多源或共享目录时，查阅 [批次手册](skills/ai-project-migration/references/batch.md)。处理已有副本、旧入口或中途中断时，查阅 [接续手册](skills/ai-project-migration/references/resume.md)。
+- 修改项目配置或会话验证时，查阅 [宿主适配](skills/ai-project-migration/references/hosts.md) 和 [会话验收](skills/ai-project-migration/references/chats.md)。用户可见的安装与用法见 [中文 README](README.md) 和 [英文 README](README.en.md)。
+
+## 迁移逻辑与边界
+
+- 单目录先确认范围并记录基准，再复制并独立校验文件、元数据和源目录稳定性。校验通过后，切换宿主的新工作位置并按需验证 Git 工作树。退出占用程序后，离线改名保留原实体备份并建立旧入口。Windows 使用目录联接，macOS 使用目录符号链接。
+- Codex 多源批次先确认完整源清单和共享范围，同一实体只搬一次。全部副本通过校验后，先接好并验证所有旧入口，再逐项目换源并回读。保留原项目 ID、来源主次角色和未选来源。
+- 遇到未知目标、已有链接、复制中断或现场与检查点不符时，先只读核对实体身份、配置和回执，从已证实的阶段接续。保留原件和已有候选，避免重复复制或改名。
+- 分别记录文件校验、项目配置、旧历史可读性、原会话实际读写和 Git 工作树结果。实际读写须由所属宿主确认原会话身份，并从该会话的默认工作目录运行探针。缺少证据时标记待核。代发探针前须取得对指定会话的明确授权。
+- 保留旧入口和目标实体。进入旧入口删除内容会影响目标项目。只有适用验收全部通过且备份没有独有数据或未解释差异时，才指出可由用户手动清理的实体备份。项目运行记录、会话标识和真实路径留在本机，不提交到仓库。
+
+## 修改后如何验证
+
+- 修改脚本时，按 [开发验证说明](tests/README.md) 使用仓库和真实项目之外的独立空目录。Windows 运行 `tests/run.py`，macOS 运行 `tests/macos_ci.py`，APFS 自动验证见 [CI 工作流](.github/workflows/macos-apfs.yml)。
+- 测试会实际操作沙盒文件和 Git 工作树，宿主和会话证据使用测试数据。真实宿主与旧会话的验证结果以实际验收为准。
+- 修改用户可见流程时，同步核对中英文说明。仅修改文档时，检查链接、路径及流程描述与实现是否一致。

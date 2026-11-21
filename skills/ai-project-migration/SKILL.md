@@ -5,7 +5,7 @@ description: 引导用户在同一台电脑上把本地 AI 项目迁到选定的
 
 # AI 项目迁移助手
 
-英文显示名为 **AI-project-migration**，安装目录和调用标识为 `ai-project-migration`。一次迁移一个本地项目。按用户的语言沟通。为用户生成的离线命令必须填好实际路径，同时说明在哪个终端运行及预期输出。
+英文显示名为 **AI-project-migration**，安装目录和调用标识为 `ai-project-migration`。一次迁移一个本地项目。按用户的语言沟通。交给用户亲自粘贴到本机终端的实际命令时，按[手动终端指引](references/terminal.md)提供对应系统的图示、实际命令和简短步骤。
 
 安装或更新应使用个人技能目录，放在待搬项目之外。正在迁移或已经发出离线切换命令时，请先完成当前迁移，再更新同一份 Skill。[安装与更新说明](https://github.com/nanjiang976-ui/AI-project-migration#update)
 

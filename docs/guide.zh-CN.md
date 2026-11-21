@@ -39,7 +39,7 @@ Windows 跨盘测试使用同一块 SSD 上的两个独立 NTFS 分区。macOS �
 | Claude Code 本地 CLI | `%USERPROFILE%\.claude\skills\ai-project-migration` | `~/.claude/skills/ai-project-migration` |
 | 其他可执行本地命令的 Agent | 宿主支持的个人技能目录，或一个固定工具目录 | 同左；需要时让 Agent 读取 `SKILL.md` 的完整路径 |
 
-Windows 可以把父目录粘贴到资源管理器地址栏；macOS 在访达按 `⌘⇧G` 打开个人技能目录。父目录不存在时先创建。核对路径为 `ai-project-migration/SKILL.md`，同级应有 `agents/`、`references/` 和 `scripts/`。同一个 Agent 只安装一份。若当前 Codex 已使用并能发现 `.codex/skills`，手动安装时可沿用该位置。重开 Agent 后按[首页的首次使用示例](../README.md#first-run)检查入口。[Codex 官方目录说明](https://learn.chatgpt.com/docs/build-skills) · [Claude Code Skills](https://code.claude.com/docs/en/skills)
+Windows 可以把父目录粘贴到资源管理器地址栏；macOS 在访达按 `⌘⇧G` 打开个人技能目录。父目录不存在时先创建。核对路径为 `ai-project-migration/SKILL.md`，同级应有 `agents/`、`assets/`、`references/` 和 `scripts/`。同一个 Agent 只安装一份。若当前 Codex 已使用并能发现 `.codex/skills`，手动安装时可沿用该位置。重开 Agent 后按[首页的首次使用示例](../README.md#first-run)检查入口。[Codex 官方目录说明](https://learn.chatgpt.com/docs/build-skills) · [Claude Code Skills](https://code.claude.com/docs/en/skills)
 
 ### 为什么 CLI 更新沿用原安装命令？
 
@@ -61,7 +61,7 @@ Codex 需要搬多个已选来源，或同一目录被多个项目共享时，�
 | 6. 测一条原聊天 | 检查链接、原会话身份和默认目录双向读写 | **重开且链接正确后选 A/B** | 原聊天通过默认目录读写到目标文件，临时文件已清理 |
 | 7. 收尾 | 分别报告历史读取、实际写入、Git 工作树和备份的检查结果 | 验收后决定何时手动清理备份 | 旧入口可用，备份独有或不同的内容已保全 |
 
-**第 5 步**：A 是在资源管理器或访达里手动改名，然后运行命令建链接；B 是由命令完成改名、建链接和检查。先保存本次命令，再退出 Agent；Windows 桌面应用也要退出托盘后台。重开后说“联接已建立”。助手会核对真实状态，已经完成的动作可以接续。
+**第 5 步**。退出前，助手会交付你选定方式的一段命令和对应系统的终端图示。先保存命令，再退出占用项目的程序。Windows 桌面应用也要退出托盘后台。选 A 时，先在资源管理器或访达里按指定名称改名，再到项目外的独立终端运行命令建链接。选 B 时，直接到独立终端运行命令，由它完成改名、建链接和检查。重开后说“联接已建立”，助手会核对实际状态并接续。[Windows 图示](../skills/ai-project-migration/assets/open-terminal-windows.png) · [macOS 图示](../skills/ai-project-migration/assets/open-terminal-macos.png)
 
 **第 6 步**：A 是你把专用提示词贴到原项目的一条旧聊天，再告诉助手结果；B 是让助手自动验证。若需代发到另一条聊天，要先选定并明确授权。测试从该聊天默认目录创建随机文件，核对原名入口、目标文件身份和双向读写，再清理临时文件。恢复后的目录有时会显示新地址，原会话身份与实际写入结果分别核验。
 
@@ -88,7 +88,7 @@ macOS 示例
 
 ## 常见问题
 
-**改名时显示“正在使用”怎么办？** 保存文件，退出占用该项目的 Agent 或编辑器；关闭当前目录在项目里的终端。在项目外打开独立 PowerShell 或 Mac 终端，使用本次准备的命令重试。如果仍然失败，把报错交给助手核对。
+**改名时显示“正在使用”怎么办？** 保存文件，退出占用该项目的 Agent 或编辑器；关闭当前目录在项目里的终端。把报错交给助手，先核对改名或建链接做到哪一步。确认需要重试时，再从项目外打开独立 PowerShell 或 Mac 终端，执行本次准备的命令。
 
 **机器重启了，或只完成了改名怎么办？** 保留源、目标和 `.migration-checks`。重开后说“继续上次迁移”。助手会依据检查点核对目录是否已改名、链接是否已建立，以及下一步由谁操作。
 

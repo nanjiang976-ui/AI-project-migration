@@ -39,7 +39,7 @@ If Claude Code guides the move of a project whose chats belong to Codex, those c
 | Claude Code local CLI | `%USERPROFILE%\.claude\skills\ai-project-migration` | `~/.claude/skills/ai-project-migration` |
 | Other agents with local command access | A personal skills directory supported by the host or a stable tools directory | Same approach. Provide the full path to `SKILL.md` when needed. |
 
-Use the File Explorer address bar on Windows or `⌘⇧G` in Finder on macOS to open the personal skills directory. Create the parent directory if needed. Check that `ai-project-migration/SKILL.md` exists and sits alongside `agents/`, `references/` and `scripts/`. Choose one installation per host. Codex environments that already discover personal skills in `.codex/skills` can keep using that location for a manual installation. Restart the agent and try the [first-use prompt](../README.en.md#first-run). [Codex skill locations](https://learn.chatgpt.com/docs/build-skills) · [Claude Code skills](https://code.claude.com/docs/en/skills)
+Use the File Explorer address bar on Windows or `⌘⇧G` in Finder on macOS to open the personal skills directory. Create the parent directory if needed. Check that `ai-project-migration/SKILL.md` exists and sits alongside `agents/`, `assets/`, `references/` and `scripts/`. Choose one installation per host. Codex environments that already discover personal skills in `.codex/skills` can keep using that location for a manual installation. Restart the agent and try the [first-use prompt](../README.en.md#first-run). [Codex skill locations](https://learn.chatgpt.com/docs/build-skills) · [Claude Code skills](https://code.claude.com/docs/en/skills)
 
 ### Why rerun the installation command to update?
 
@@ -61,7 +61,7 @@ Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.m
 | 6. Test an old chat | Checks the link, original session identity and two-way reads/writes from its default directory | **Choose A/B after restart and link verification**; use an existing chat from before the move | The chat reaches the same file at the destination and the temporary probe is removed |
 | 7. Review | Reports history access, actual writes, Git worktrees and the source-drive backup separately | After acceptance, decide whether to manually remove the backup | Any unique or different data has been accounted for |
 
-**Step 5.** With A, rename the original yourself in Explorer or Finder, then paste the command to create the link. With B, the command renames the folder, creates the link and checks it. Save your command before quitting the agent. On Windows, fully quit desktop apps, including the tray app. After restart, say “The link is in place.” The assistant verifies the current state and resumes from the last completed action.
+**Step 5.** The assistant gives you one command for your chosen method, with a guide to opening the terminal on your system. Save the command before quitting programs using the project. On Windows, fully quit desktop apps, including the tray app. With A, rename the original in File Explorer or Finder as instructed, then run the command in a separate terminal outside the project to create the link. With B, run the command from that terminal to rename the folder, create the link and check it. After restarting the agent, say “The link is in place.” The assistant verifies the current state and resumes from there. [Windows illustration](../skills/ai-project-migration/assets/open-terminal-windows.png) · [macOS illustration](../skills/ai-project-migration/assets/open-terminal-macos.png)
 
 **Step 6.** With A, paste the supplied prompt into a selected original chat and report back. With B, let the assistant test an eligible existing chat. Sending to another chat requires a supported host integration, a specific chat selection and your explicit permission. From the chat's default directory the probe creates a random file, verifies the old path and the destination access the same file, writes back in the other direction and removes the probe. A resumed chat may show the resolved destination path. Its identity and real write result are checked separately.
 
@@ -88,7 +88,7 @@ macOS example
 
 ## Troubleshooting
 
-**The folder is in use. What should I do?** Save your changes and quit the agent or editor holding the project. Close terminals whose current directory is inside it. Open a separate PowerShell or Mac terminal outside the project and retry the prepared command. If it still fails, ask the assistant to check the reported error.
+**The folder is in use. What should I do?** Save your changes and quit the agent or editor holding the project. Close terminals whose current directory is inside it. Share the error with the assistant so it can check whether the rename or link creation already completed. If the command needs to be retried, run it in a separate PowerShell or Mac terminal outside the project.
 
 **My computer restarted or only the rename completed. How do I continue?** Keep both locations and the local `.migration-checks` folder, then say “Resume the last migration.” The assistant checks the current files and recorded checkpoints before continuing.
 

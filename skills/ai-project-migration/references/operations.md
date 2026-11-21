@@ -46,7 +46,7 @@ cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-c
 cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-copy --mode auto
 ```
 
-只运行选择的一行，将生成的离线命令原样交给用户。Windows 用独立 PowerShell 5.1 或 7，完全退出占用者和托盘后台；macOS 用独立终端运行生成的 shell 命令，关闭以该目录为工作位置的应用/Agent。不要把终端开在待改名项目内。A 先手动把 OLD 改为指定 BACKUP，B 直接运行。预期是准确的 FullName、Target、Backup 和匹配本机的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
+只运行选择的一行 `prepare`，在用户退出前按[手动终端指引](terminal.md#offline-cutover)交付它生成的那一段离线命令、对应系统的图示及所选模式的操作顺序。预期输出包含准确的 FullName、Target、Backup 和对应的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
 
 重开后运行 `cutover.py status --plan RUN/cutover-plan.json`。phase 为 linked 且旧入口、目标和备份身份都匹配，才进入步骤 6。已经改好名但链接尚未建立时，通过备份实体标识和计划接续。遇到错误链接、重名备份、盘的系统标识变化或目录被占用，停止该次切换，保留原件并写出准确路径。实际已建立且身份正确的链接可直接验证，不重新创建。
 

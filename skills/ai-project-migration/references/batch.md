@@ -58,12 +58,14 @@ project_batch.py status --batch BATCH
 
 ## 2. 接好原名入口，再逐项目换源
 
-全部副本核验后确认各受影响项目已暂停写入。在原名仍为实体时，处理并核验必要的 Git 工作树关联。校验两边文件及 Git 回执。选 A 手动改名，或 B 让命令改名，再生成本批次的一段离线命令。仍按操作系统的原流程退出占用程序，Windows 使用独立 PowerShell，macOS 从独立终端运行。两个模式只交付用户选择的一段命令。
+全部副本核验后确认各受影响项目已暂停写入。在原名仍为实体时，处理并核验必要的 Git 工作树关联。校验两边文件及 Git 回执。选 A 手动改名或 B 让命令改名，只运行所选模式的 `prepare`。
 
 ```text
 project_batch.py prepare --batch BATCH --mode manual
 project_batch.py prepare --batch BATCH --mode auto
 ```
+
+退出前按[手动终端指引](terminal.md#offline-cutover)交付 `prepare` 生成的那一段批次离线命令及对应系统的图示。选 A 时，列出需要手动改名的每个原件和计划中对应的备份完整路径。选 B 时，交付直接运行命令的步骤。说明成功时每个旧入口都应指向各自的目标，备份仍是原实体。
 
 离线链接以批次计划和每个原/目标实体的身份为准。重启后读取 `status`。发生占用、中断或阻塞，按实际 ready/renamed/linked 状态续做，保留已完成入口和对应实体备份。
 
