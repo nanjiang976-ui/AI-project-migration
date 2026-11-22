@@ -15,6 +15,7 @@ import unittest
 from uuid import uuid4
 
 from batch_checks import ProjectBatchChecks
+from cutover_checks import CutoverChecks
 from preflight_checks import PreflightChecks
 from record_checks import RecordChecks
 from resume_checks import ResumeInspectionChecks
@@ -109,7 +110,8 @@ def mounted(scratch, suffix, filesystem):
         disk.detach()
 
 
-class MacMigrationTests(PreflightChecks, ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, unittest.TestCase):
+class MacMigrationTests(CutoverChecks, PreflightChecks, ProjectBatchChecks, RecordChecks, ResumeInspectionChecks,
+                        unittest.TestCase):
     source_image = None
     target_image = None
 

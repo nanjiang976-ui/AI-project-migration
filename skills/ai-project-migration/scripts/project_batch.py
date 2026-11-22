@@ -1,6 +1,5 @@
 """Coordinate approved local Codex project roots using the single-directory migration tools."""
 import argparse
-import gzip
 import json
 import os
 from pathlib import Path
@@ -14,7 +13,7 @@ from uuid import uuid4
 import cutover
 import git_check
 from run_record import timestamp, volumes
-from tree_copy import changed_since, exclusive_lock
+from tree_copy import exclusive_lock, recheck_verified_copy
 
 HERE = Path(__file__).resolve().parent
 PLAN = "batch.json"
@@ -313,29 +312,6 @@ def verify_baseline(root, run):
     return report["snapshot"]
 
 
-def freshness(path, manifest, exceptions):
-    # Recheck bytes, file names, streams and metadata after resume. Only a
-    # verified Git reverse-pointer rewrite and rename ctime have exceptions.
-    if sys.platform == "darwin":
-        from mac_tree import snapshot
-    else:
-        from tree_copy import snapshot
-    live = snapshot(path, True)
-    remaining = set(live)
-    with gzip.open(manifest, "rt", encoding="utf-8") as file:
-        for line in file:
-            expected = json.loads(line)
-            name = expected.pop("path")
-            row = live.get(name)
-            ignore = exceptions.get(name, ())
-            require(name in remaining and {k: v for k, v in expected.items() if k not in ignore}
-                    == {k: v for k, v in (row or {}).items() if k not in ignore},
-                    f"文件在副本验收后变化：{path} / {name}")
-            remaining.remove(name)
-    require(not remaining and not changed_since(live, snapshot(path, False)),
-            f"复核期间内容变化或出现额外项：{path}")
-
-
 def phase(root, run):
     plan = run / cutover.PLAN_NAME
     if not plan.is_file():
@@ -362,14 +338,8 @@ def preflight_cutover(batch, plan, needs_plans=False):
             original = Path(root["backup"] if status == "renamed" else root["source"])
             require(cutover.real_dir(original) == root["source_id"], f"原件身份变化：{original}")
             pending = git_check.verify(Path(root["target"]), snap, allow_source=not needs_plans)
-            # Git repair can change mtime or inode for a verified reverse pointer, but
-            # its content and permissions must still match the copy evidence.
-            exceptions = {".git/worktrees/" + row["admin"] + "/gitdir":
-                          ("mtime_ns","ctime_ns","identity") for row in snap["linked"] if row["path"] not in pending}
-            stem = evidence["report"].removesuffix("-verify.json")
-            freshness(original, run/"tree-copy"/(stem+"-source.jsonl.gz"),
-                      {".": ("ctime_ns",)} if status == "renamed" else {})
-            freshness(Path(root["target"]), run/"tree-copy"/(stem+"-destination.jsonl.gz"), exceptions)
+            recheck_verified_copy(original, Path(root["target"]), evidence, renamed=status == "renamed",
+                                  pointer_exceptions=git_check.repair_metadata_exceptions(snap, pending))
         items.append((root, run, status))
     return items
 

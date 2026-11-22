@@ -313,10 +313,38 @@ def status(args):
                           backup=str(backup)), ensure_ascii=False))
 
 
+def verified_git_exceptions(data, source, target):
+    import git_check
+
+    baseline_path = Path(data["audit"]) / "git-before.json"
+    if stat_if_present(baseline_path) is None:
+        return {}
+    baseline, _ = ordinary_record(baseline_path)
+    snap = baseline["snapshot"]
+    require(baseline.get("schema") == 1 and baseline.get("ok") is True
+            and baseline.get("mode") == "baseline" and baseline["root"] == snap["root"] == str(source),
+            f"Git 基准与本次原项目不一致：{baseline_path}")
+    if snap["linked"]:
+        git_check.verify(target, snap)
+    return git_check.repair_metadata_exceptions(snap)
+
+
 def apply_locked(args):
-    phase, source, target, backup = state(args.plan)
+    from tree_copy import recheck_verified_copy
+
+    data, source, target, backup = read_plan(args.plan)
+    phase = observe(data, source, target, backup)
     if phase == "ready":
         require(args.mode == "auto", f"你选择了手动改名。请将 {source} 改名为 {backup.name} 后重试")
+    if phase != "linked":
+        # A successful new verify can supersede the receipt that created the plan.
+        _, evidence = verified_copy(source, target, Path(data["audit"]), data["copy_evidence"]["directory"])
+        original = backup if phase == "renamed" else source
+        exceptions = verified_git_exceptions(data, source, target)
+        recheck_verified_copy(original, target, evidence, renamed=phase == "renamed",
+                              pointer_exceptions=exceptions)
+        require(observe(data, source, target, backup) == phase, "切换复核期间目录状态发生变化")
+    if phase == "ready":
         rename_exclusive(source, backup)
         phase, source, target, backup = state(args.plan)
     if phase == "renamed":
@@ -368,6 +396,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (MigrationError, OSError, KeyError, ValueError) as e:
+    except (MigrationError, OSError, EOFError, KeyError, RuntimeError, ValueError) as e:
         print(f"已停止：{e}", file=sys.stderr)
         sys.exit(1)
