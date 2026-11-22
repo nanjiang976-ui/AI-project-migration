@@ -77,7 +77,7 @@ Replace the example project name and paths with your own. If the destination fol
 $ai-project-migration Demo has several source folders. List the full path of each one, whether it is primary or secondary, and which folders other projects share. Let me choose what to move and where, then ask me to confirm which projects to update together.
 ```
 
-To move only a secondary source, add “Keep the existing primary folder.” If you select a shared folder, the assistant lists the affected projects and waits for you to confirm which ones to update.
+To move one secondary source, add “Keep the existing primary folder.” The batch workflow applies even if only this project uses the secondary folder. To verify the move, use an original chat started from the primary folder. The probe keeps that chat's default working directory and tests two-way reads and writes to the migrated files through the secondary folder's old path. If you select a shared folder, the assistant lists the affected projects and waits for you to confirm which ones to update.
 
 ### 4. You moved some files by hand or paused a migration
 
@@ -126,7 +126,7 @@ $ai-project-migration Run the final verification and report the results for proj
 
 Keep the existing source list and choose which folder to move. If only your project uses the primary folder and you move just that folder, shared sources can stay in place. For example, `Demo` might use `SharedAssets` as a secondary source while `AssetLibrary` uses the same folder as its primary source. If you confirm the move, copy and verify the folder once, then update the corresponding entry in each project to the same destination, keeping its primary or secondary role. Codex saves source lists per project, so update each affected project separately.
 
-The skill lists sources and shared references before copying. Select several physical folders in one batch, or move one shared folder and update the projects that reference it. After every copy passes verification, the batch restores the old paths, then switches and checks each project. Resume an existing single-folder move from its original checkpoint. [Codex batch workflow](skills/ai-project-migration/references/batch.md)
+The skill lists sources and shared references before copying. Use the batch workflow to move one secondary source, several physical folders, or one shared folder and update the projects that reference it. After every copy passes verification, the batch restores the old paths, then switches and checks each project. Resume an existing single-folder move from its original checkpoint. [Codex batch workflow](skills/ai-project-migration/references/batch.md)
 
 ### How can I reclaim space on the original drive and keep old chats working with the migrated files?
 

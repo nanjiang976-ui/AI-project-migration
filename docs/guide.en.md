@@ -53,7 +53,7 @@ Use the File Explorer address bar on Windows or `⌘⇧G` in Finder on macOS to 
 
 ## The seven steps for a single folder
 
-Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.md) to move several selected source folders, or one folder shared by multiple projects. Confirm every reference and destination first. Copy each shared physical folder once, restore the old paths, then update each project. Resume a single-folder move already in progress from its original checkpoint.
+Use the Codex batch workflow to move one secondary source, several selected source folders, or one folder shared by multiple projects. Confirm every reference and destination first. Copy each shared physical folder once, restore the old paths, then update each project. When moving only a secondary source, keep the primary folder in place. An original chat started from the primary folder can run the probe from its default working directory and verify two-way reads and writes through the secondary folder's old path. Resume a single-folder move already in progress from its original checkpoint. [Codex batch workflow](../skills/ai-project-migration/references/batch.md)
 
 | Step | What the assistant does | What you do | What success looks like |
 |---|---|---|---|

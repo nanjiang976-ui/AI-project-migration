@@ -286,16 +286,14 @@ class ProjectBatchChecks:
     def synthetic_history(self, phase):
         # Retain original logical working-directory values through cutover. The
         # same test process then uses those paths to run real filesystem probes.
-        def chat(id, cwd):
-            return {"id": id, "cwd": str(cwd), "history_readable": True, "archived": False}
-
         baseline = self.load_evidence(self.source_snapshot)
-        original = next(row["sources"][0]["path"] for row in baseline["projects"]
-                        if row["id"] == "demo")
-        value = {"host_id": "fixture-local", "projects": [
-            {"id": "demo", "complete": True, "sessions": [chat("demo-old", original)]},
-            {"id": "library", "complete": True, "sessions": [chat("library-old", self.shared)]},
-        ]}
+        projects = []
+        for project in baseline["projects"]:
+            project_id = project["id"]
+            primary = next(source["path"] for source in project["sources"] if source["role"] == "primary")
+            session = {"id": project_id + "-old", "cwd": primary, "history_readable": True, "archived": False}
+            projects.append({"id": project_id, "complete": True, "sessions": [session]})
+        value = {"host_id": baseline["host_id"], "projects": projects}
         return self.evidence("history", "--phase", phase, "--input",
                              self.write_batch_evidence(phase + "-chats.json", value))
 
@@ -339,6 +337,67 @@ class ProjectBatchChecks:
     def batch_cleanup_status(self, readback):
         report = json.loads(self.evidence("status", "--snapshot", readback))
         return {row["source_id"]: row for row in report["roots"]}
+
+    def test_batch_moves_only_one_unshared_secondary_from_old_primary_chat(self):
+        self.batch_fixture()
+        config = self.load_evidence(self.source_snapshot)
+        config["projects"] = [project for project in config["projects"] if project["id"] == "demo"]
+        self.source_snapshot = self.write_batch_evidence("unshared-before.json", config)
+        self.selection = self.write_batch_evidence("unshared-secondary-only.json", {
+            "sources": [self.choice(self.shared, self.shared_new, ["demo"])],
+            "allow_same_volume": False,
+        })
+        primary_files = {path.name: path.read_bytes() for path in self.primary.iterdir()}
+        primary_id, secondary_id, untouched_id = (path.stat().st_ino for path in
+                                                  (self.primary, self.shared, self.untouched))
+
+        self.batch_command("create", "--snapshot", self.source_snapshot, "--selection", self.selection)
+        self.synthetic_history("before")
+        plan = self.load_evidence(self.batch_plan)
+        self.assertEqual([row["source"] for row in plan["roots"]], [str(self.shared)])
+        self.assertEqual([row["id"] for row in plan["projects"]], ["demo"])
+        expected_sources = [self.folders(self.primary, "primary"), self.folders(self.shared_new, "secondary"),
+                            self.folders(self.untouched, "secondary")]
+        self.assertEqual(plan["projects"][0]["after"], expected_sources)
+
+        self.batch_command("stage")
+        self.batch_command("prepare", "--mode", "auto")
+        self.batch_command("link", "--mode", "auto")
+        self.assertTrue(self.linked_physical(self.shared, self.shared_new))
+        readback = self.verify_after_for("demo")
+        confirmation = json.loads(self.accept_project("demo", readback))
+        self.assertEqual(confirmation["phase"], "confirmed")
+        self.assertEqual(confirmation["actual"], expected_sources)
+        self.synthetic_history("after")
+        self.record_new_chat("demo", self.primary, self.primary, self.shared_new, self.untouched)
+
+        request = str(uuid4())
+        self.register_probe("demo", self.shared, "demo-old", request)
+        receipt = json.loads(self.attached_probe(request, self.primary))
+        self.assertEqual((receipt["mode"], receipt["cwd"], receipt["old_entry"], receipt["target"]),
+                         ("attached_source", str(self.primary), str(self.shared), str(self.shared_new)))
+        for flag in ("old_write_target_read", "target_write_old_read", "same_file", "backup_isolated", "probe_removed"):
+            self.assertIs(receipt[flag], True)
+        root = self.entity_in(self.shared)
+        backup = Path(root["backup"])
+        self.verify_batch_backup(self.shared)
+        self.assertFalse(self.batch_cleanup_status(readback)[root["id"]]["eligible"])
+        self.attest_probe("demo", "unknown-session", request, success=False)
+        self.attest_probe("demo", "demo-old", request)
+        final = self.batch_cleanup_status(readback)[root["id"]]
+        self.assertTrue(final["eligible"], final)
+        self.assertEqual(final["projects"], [{"project_id": "demo", "checked_old_chats": 1,
+                                             "tested": ["demo-old"], "request_id": request}])
+
+        self.assertEqual(self.primary.lstat().st_ino, primary_id)
+        self.assertEqual({path.name: path.read_bytes() for path in self.primary.iterdir()}, primary_files)
+        self.assertFalse(os.path.lexists(self.new) or os.path.lexists(self.backup))
+        self.assertEqual(self.untouched.lstat().st_ino, untouched_id)
+        self.assertEqual((self.untouched / "notes.txt").read_bytes(), b"notes bytes")
+        self.assertEqual(backup.lstat().st_ino, secondary_id)
+        self.assertFalse(backup.samefile(self.shared_new))
+        for path in (self.shared, self.shared_new, backup):
+            self.assertEqual({item.name: item.read_bytes() for item in path.iterdir()}, {"shared.txt": b"shared bytes"})
 
     def test_batch_shared_probe_requires_each_project_and_old_session(self):
         self.setup_batch()
