@@ -257,6 +257,12 @@ def verify(destination, snap, allow_source=False):
     return pending
 
 
+def repair_metadata_exceptions(snap, pending=()):
+    # The tracked bytes and permissions of these verified reverse pointers must still match.
+    return {f".git/worktrees/{row['admin']}/gitdir": ("mtime_ns", "ctime_ns", "identity")
+            for row in snap["linked"] if row["path"] not in pending}
+
+
 def main():
     require(sys.platform in ("win32", "darwin"), "This helper targets Windows and macOS.")
     parser = argparse.ArgumentParser(description=__doc__)

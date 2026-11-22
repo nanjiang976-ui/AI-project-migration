@@ -50,7 +50,9 @@ cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-c
 
 只运行选择的一行 `prepare`，在用户退出前按[手动终端指引](terminal.md#offline-cutover)交付它生成的那一段离线命令、对应系统的图示及所选模式的操作顺序。预期输出包含准确的 FullName、Target、Backup 和对应的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
 
-重开后运行 `cutover.py status --plan RUN/cutover-plan.json`。phase 为 linked 且旧入口、目标和备份身份都匹配，才进入步骤 6。已经改好名但链接尚未建立时，通过备份实体标识和计划接续。遇到错误链接、重名备份、盘的系统标识变化或目录被占用，停止该次切换，保留原件并写出准确路径。实际已建立且身份正确的链接可直接验证，不重新创建。
+离线执行期间继续暂停两端写入。命令在改名前复核原目录和目标的最新成功校验清单。手动改名或上次停在改名后时，命令在建链接前复核已改名的备份和目标。发现变化便停止，保留两端及报错。还未改名时，先保全和核对各自的新改动，再独立校验并重试。已经改名时先做只读接续检查，需要恢复原名重验时按下方的回退流程处理。
+
+重开后运行 `cutover.py status --plan RUN/cutover-plan.json`。phase 为 linked 且旧入口、目标和备份身份都匹配，才进入步骤 6。遇到错误链接、重名备份、盘的系统标识变化或目录被占用，停止该次切换，保留原件并写出准确路径。实际已建立且身份正确的链接可直接验证，不重新创建。
 
 ## 步骤 6–7 · 会话验证、复核与清理
 

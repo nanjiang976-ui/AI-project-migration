@@ -165,6 +165,48 @@ def save_manifest(path, rows):
             out.write(json.dumps({"path": k, **rows[k]}, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
+def verify_manifest(root, manifest, snapshot_tree, exceptions):
+    info = manifest.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (
+            os.name == "nt" and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError(f"需要本次核验的独立普通清单文件：{manifest}")
+    live = snapshot_tree(root, True)
+    remaining = set(live)
+    with gzip.open(manifest, "rt", encoding="utf-8") as file:
+        for line in file:
+            expected = json.loads(line)
+            name = expected.pop("path")
+            ignored = exceptions.get(name, ())
+            if name not in remaining or (
+                    {k: v for k, v in expected.items() if k not in ignored}
+                    != {k: v for k, v in live[name].items() if k not in ignored}):
+                raise ValueError(f"文件在副本验收后变化：{root} / {name}")
+            remaining.remove(name)
+    if remaining:
+        raise ValueError(f"副本验收后出现额外项：{root} / {min(remaining)}")
+    return live
+
+
+def recheck_verified_copy(original, target, evidence, *, renamed, pointer_exceptions):
+    snapshot_tree = snapshot
+    if sys.platform == "darwin":
+        from mac_tree import snapshot as snapshot_tree
+    directory = Path(evidence["directory"])
+    stem = evidence["report"].removesuffix("-verify.json")
+    # Renaming the original can change its APFS root ctime, even without any writes.
+    original_exceptions = {".": ("ctime_ns",)} if renamed else {}
+    original_live = verify_manifest(original, directory / (stem + "-source.jsonl.gz"),
+                                    snapshot_tree, original_exceptions)
+    target_live = verify_manifest(target, directory / (stem + "-destination.jsonl.gz"),
+                                  snapshot_tree, pointer_exceptions)
+    # Revisit metadata after hashing both trees so writes during the other scan
+    # can also stop the cutover.
+    for root, live in ((original, original_live), (target, target_live)):
+        changes = changed_since(live, snapshot_tree(root, False))
+        if changes:
+            raise ValueError(f"切换复核期间文件发生变化：{root} / {changes[0]}")
+
+
 def summarize(rows):
     return {"files": sum(r["type"] == "file" for r in rows.values()),
             "directories_including_root": sum(r["type"] == "dir" for r in rows.values()),

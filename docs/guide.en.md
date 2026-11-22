@@ -67,6 +67,8 @@ Use the [Codex batch workflow](../skills/ai-project-migration/references/batch.m
 
 **Step 5.** The assistant gives you one command for your chosen method, with a guide to opening the terminal on your system. Save the command before quitting programs using the project. On Windows, fully quit desktop apps, including the tray app. With A, rename the original in File Explorer or Finder as instructed, then run the command in a separate terminal outside the project to create the link. With B, run the command from that terminal to rename the folder, create the link and check it. After restarting the agent, say “The link is in place.” The assistant verifies the current state and resumes from there. [Windows illustration](../skills/ai-project-migration/assets/open-terminal-windows.png) · [macOS illustration](../skills/ai-project-migration/assets/open-terminal-macos.png)
 
+For a single folder, the offline command rechecks the original and the destination. If files have changed since verification, cutover stops. Keep both folders, including the backup if you already renamed the original, and share the error so the assistant can resume from the current state.
+
 **Step 6.** With A, paste the supplied prompt into a selected original chat and report back. With B, let the assistant test an eligible existing chat. Sending to another chat requires a supported host integration, a specific chat selection and your explicit permission. From the chat's default directory the probe creates a random file, verifies the old path and the destination access the same file, writes back in the other direction and removes the probe. A resumed chat may show the resolved destination path. Its identity and real write result are checked separately.
 
 ## Which folder should I keep?
