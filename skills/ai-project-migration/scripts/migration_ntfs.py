@@ -1,6 +1,7 @@
 """Small Windows APIs needed to preserve NTFS streams and access rules (Python 3.12+)."""
 import ctypes as c
 from ctypes import wintypes as w
+from contextlib import contextmanager
 from functools import lru_cache
 import hashlib
 import msvcrt
@@ -14,6 +15,7 @@ P = c.c_void_p
 INVALID = c.c_void_p(-1).value
 PROTECTED = 0x1000
 OWNER_GROUP_DACL = 7
+JUNCTION_TAG = 0xA0000003
 
 
 def api(dll, name, result, *types):
@@ -37,6 +39,15 @@ create = api(kernel, "CreateFileW", w.HANDLE, w.LPCWSTR, w.DWORD, w.DWORD, P, w.
 close = api(kernel, "CloseHandle", w.BOOL, w.HANDLE)
 volume_info = api(kernel, "GetVolumeInformationW", w.BOOL, w.LPCWSTR, w.LPWSTR, w.DWORD, P, P, P, w.LPWSTR, w.DWORD)
 final_name = api(kernel, "GetFinalPathNameByHandleW", w.DWORD, w.HANDLE, w.LPWSTR, w.DWORD, w.DWORD)
+get_handle_security = api(adv, "GetSecurityInfo", w.DWORD, w.HANDLE, c.c_int, w.DWORD,
+                          P, P, P, P, c.POINTER(P))
+set_handle_security = api(adv, "SetSecurityInfo", w.DWORD, w.HANDLE, c.c_int, w.DWORD, P, P, P, P)
+sd_length = api(adv, "GetSecurityDescriptorLength", w.DWORD, P)
+local_free = api(kernel, "LocalFree", P, P)
+device_control = api(kernel, "DeviceIoControl", w.BOOL, w.HANDLE, w.DWORD, P, w.DWORD,
+                     P, w.DWORD, c.POINTER(w.DWORD), P)
+get_handle_info = api(kernel, "GetFileInformationByHandleEx", w.BOOL, w.HANDLE, c.c_int, P, w.DWORD)
+set_file_time = api(kernel, "SetFileTime", w.BOOL, w.HANDLE, P, P, P)
 
 
 class SecAttrs(c.Structure):
@@ -91,7 +102,30 @@ def physical(path):
         close(h)
 
 
-def descriptor(path):
+@contextmanager
+def reparse_handle(path, access=0):
+    """Open the link object itself, including a junction with a missing target."""
+    handle = create(wide(path), access, 7, None, 3, 0x02000000 | 0x00200000, None)
+    if handle == INVALID:
+        fail(path)
+    try:
+        yield handle
+    finally:
+        close(handle)
+
+
+def descriptor(path, *, nofollow=False):
+    if nofollow:
+        with reparse_handle(path, 0x20000) as handle:
+            allocated = P()
+            code = get_handle_security(handle, 1, OWNER_GROUP_DACL, None, None, None, None,
+                                       c.byref(allocated))
+            if code:
+                raise OSError(code, c.FormatError(code), str(path))
+            try:
+                return c.create_string_buffer(c.string_at(allocated, sd_length(allocated)))
+            finally:
+                local_free(allocated)
     n = w.DWORD()
     if get_sd(wide(path), OWNER_GROUP_DACL, None, 0, c.byref(n)) or c.get_last_error() != 122:
         fail(path)
@@ -136,8 +170,8 @@ def acl_hash(data):
     return hashlib.sha256(signature).hexdigest()
 
 
-def security(path):
-    sd = descriptor(path)
+def security(path, *, nofollow=False):
+    sd = descriptor(path, nofollow=nofollow)
     addr = acl_addr(sd)
     length = c.c_uint16.from_address(addr + 2).value
     result = [acl_hash(c.string_at(addr, length))]
@@ -149,8 +183,8 @@ def security(path):
     return result, bool(struct.unpack_from("<H", sd.raw, 2)[0] & PROTECTED)
 
 
-def template_sd(path, protect=False):
-    sd = descriptor(path)
+def template_sd(path, protect=False, *, nofollow=False):
+    sd = descriptor(path, nofollow=nofollow)
     if protect:
         addr = acl_addr(sd)
         length = c.c_uint16.from_address(addr + 2).value
@@ -161,8 +195,8 @@ def template_sd(path, protect=False):
     return sd
 
 
-def create_secured(path, source, *, directory, protect=False):
-    sd = template_sd(source, protect)
+def create_secured(path, source, *, directory, protect=False, source_nofollow=False):
+    sd = template_sd(source, protect, nofollow=source_nofollow)
     sa = SecAttrs(c.sizeof(SecAttrs), c.cast(sd, P), False)
     if directory:
         if not mkdir(wide(path), c.byref(sa)):
@@ -180,18 +214,83 @@ def create_secured(path, source, *, directory, protect=False):
     return os.fdopen(fd, "wb")
 
 
-def restore_security(source, dest, root):
-    expected, protected = security(source)
-    actual, actual_protected = security(dest)
+def restore_security(source, dest, root, *, nofollow=False):
+    expected, protected = security(source, nofollow=nofollow)
+    actual, actual_protected = security(dest, nofollow=nofollow)
     if actual != expected or actual_protected != (root or protected):
-        sd = template_sd(source, root)
+        sd = template_sd(source, root, nofollow=nofollow)
         # Only set owner/group if needed; unrelated rights may be unavailable.
         mask = 4 | (1 if expected[1] != actual[1] else 0) | (2 if expected[2] != actual[2] else 0)
-        if not set_sd(wide(dest), mask, sd):
+        if nofollow:
+            owner, group, dacl = P(), P(), P()
+            unused, present = w.BOOL(), w.BOOL()
+            if (not get_owner(sd, c.byref(owner), c.byref(unused))
+                    or not get_group(sd, c.byref(group), c.byref(unused))
+                    or not get_dacl(sd, c.byref(present), c.byref(dacl), c.byref(unused))):
+                fail(source)
+            access = 0x20000 | 0x40000
+            if mask & 3:
+                access |= 0x80000
+            mask |= 0x80000000 if root or protected else 0x20000000
+            with reparse_handle(dest, access) as handle:
+                code = set_handle_security(handle, 1, mask, owner, group, dacl, None)
+                if code:
+                    raise OSError(code, c.FormatError(code), str(dest))
+        elif not set_sd(wide(dest), mask, sd):
             fail(dest)
-        actual, actual_protected = security(dest)
+        actual, actual_protected = security(dest, nofollow=nofollow)
         if actual != expected or actual_protected != (root or protected):
             raise PermissionError(f"Could not reproduce effective security: {dest}")
+
+
+def junction_streams(path):
+    """Query ADS on the junction handle, never the referenced directory."""
+    size = 4096
+    with reparse_handle(path) as handle:
+        while True:
+            data = c.create_string_buffer(size)
+            if get_handle_info(handle, 7, data, size):
+                break
+            code = c.get_last_error()
+            if code == 38:
+                return {}
+            if code != 234 or size >= 2**20:
+                fail(path)
+            size *= 2
+    result = {}
+    offset = 0
+    while True:
+        next_offset, name_size, stream_size = struct.unpack_from("<IIq", data.raw, offset)
+        name = data.raw[offset + 24:offset + 24 + name_size].decode("utf-16-le")
+        if name != "::$DATA":
+            result[name] = stream_size
+        if not next_offset:
+            return result
+        offset += next_offset
+
+
+def create_junction(path, target, source):
+    """Create a fresh, secured junction. Its target is supplied by tree_copy."""
+    create_secured(path, source, directory=True, source_nofollow=True)
+    substitute = ("\\??\\" + str(target)).encode("utf-16-le")
+    printable = str(target).encode("utf-16-le")
+    names = substitute + b"\0\0" + printable + b"\0\0"
+    payload = struct.pack("<HHHH", 0, len(substitute), len(substitute) + 2, len(printable)) + names
+    data = struct.pack("<IHH", JUNCTION_TAG, len(payload), 0) + payload
+    returned = w.DWORD()
+    buffer = c.create_string_buffer(data)
+    with reparse_handle(path, 0x40000000) as handle:
+        if not device_control(handle, 0x900A4, buffer, len(data), None, 0, c.byref(returned), None):
+            fail(path)
+
+
+def junction_metadata(source, dest, mtime_ns, attrs):
+    restore_security(source, dest, False, nofollow=True)
+    ticks = c.c_ulonglong(mtime_ns // 100 + 116444736000000000)
+    with reparse_handle(dest, 0x100) as handle:
+        if not set_file_time(handle, None, None, c.byref(ticks)):
+            fail(dest)
+    write_attrs(dest, attrs & ~0x400)
 
 
 def streams(path):

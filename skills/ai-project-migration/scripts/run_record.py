@@ -1,6 +1,7 @@
 """Append-only checkpoints and final safety notices for a local project migration."""
 import argparse
 from datetime import datetime, timezone
+from functools import partial
 import gzip
 import json
 import os
@@ -186,12 +187,13 @@ def git_time_exceptions(run, old, target, *, batch=False):
     return {".git/worktrees/" + tree["admin"] + "/gitdir" for tree in before["snapshot"]["linked"]}
 
 
-def check_current_manifest(root, manifest):
+def check_current_manifest(root, manifest, *, junction_root=None):
     from tree_copy import changed_since
     if sys.platform == "darwin":
         from mac_tree import snapshot
     else:
         from tree_copy import snapshot
+        snapshot = partial(snapshot, junction_root=junction_root)
     current = snapshot(root, True)
     remaining = set(current)
     with gzip.open(manifest, "rt", encoding="utf-8") as saved:
@@ -251,9 +253,10 @@ def verify_backup_files(config, run, probe_wrote, *, batch=False):
             or comparison.get("source_summary") != comparison.get("destination_summary")):
         raise ValueError("备份有独有内容、两边存在差异或发生了未解释的变更")
     for side, root in (("source", backup), ("destination", target)):
-        count = check_current_manifest(root, folder / (tag + "-" + side + ".jsonl.gz"))
+        count = check_current_manifest(root, folder / (tag + "-" + side + ".jsonl.gz"),
+                                       junction_root=old if side == "source" else None)
         summary = comparison[side + "_summary"]
-        if count != summary["files"] + summary["directories_including_root"]:
+        if count != summary["files"] + summary["directories_including_root"] + summary.get("junctions", 0):
             raise ValueError("文件清单条目数量不符")
     return "本次已复验备份、目标和许可的时间差异；如继续编辑，请重新核验"
 

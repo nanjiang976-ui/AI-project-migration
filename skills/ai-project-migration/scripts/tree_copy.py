@@ -3,6 +3,7 @@ import argparse
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import partial
 import gzip
 import hashlib
 import json
@@ -18,7 +19,8 @@ if os.name == "nt":
     import migration_ntfs as nt
 
 SETTABLE = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x80 | 0x100 | 0x2000
-COMPARE_FIELDS = ("type", "size", "sha256", "streams", "attrs", "mtime_ns", "security")
+COMPARE_FIELDS = ("type", "size", "sha256", "streams", "attrs", "mtime_ns", "security",
+                  "junction_tag", "junction_target")
 CHUNK = 2**20
 
 
@@ -53,9 +55,10 @@ def check_disjoint(paths):
                 raise ValueError("Source, destination, and audit must be disjoint physical directories")
 
 
-def object_id(path):
+def object_id(path, *, allow_junction=False):
     s = os.lstat(nt.wide(path))
-    if s.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+    if s.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and not (
+            allow_junction and s.st_reparse_tag == nt.JUNCTION_TAG):
         raise ValueError(f"Reparse point: {path}")
     if not s.st_ino:
         raise ValueError(f"Missing NTFS file identity: {path}")
@@ -77,12 +80,16 @@ def visit(root):
         rel, path = stack.pop()
         info = os.lstat(nt.wide(path))
         attrs = nt.attributes(path)
-        if attrs & ~SETTABLE:
+        junction = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        if junction and (rel == "." or info.st_reparse_tag != nt.JUNCTION_TAG
+                         or not stat.S_ISDIR(info.st_mode)):
+            raise ValueError(f"Unsupported reparse point at {path}")
+        if attrs & ~(SETTABLE | (0x400 if junction else 0)):
             raise ValueError(f"Unsupported NTFS attributes 0x{attrs:x} at {path}; inspect before copying")
         if not info.st_ino or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
             raise ValueError(f"Unrecognized object at {path}")
         yield rel, path, info
-        if stat.S_ISDIR(info.st_mode):
+        if stat.S_ISDIR(info.st_mode) and not junction:
             with os.scandir(nt.wide(path)) as entries:
                 children = sorted((e.name for e in entries), reverse=True)
             for name in children:
@@ -99,13 +106,52 @@ def stream_record(path, with_hash):
     return streams
 
 
-def record(path, info, with_hash):
+def junction_target(root, path, *, junction_root=None):
+    """Interpret a junction relative to its pinned tree without following it."""
+    raw = os.readlink(nt.wide(path))
+    target = raw.removeprefix("\\\\?\\").removeprefix("\\??\\")
+    target_path = Path(target)
+    if (not target_path.is_absolute() or len(target_path.drive) != 2
+            or any(part in (".", "..") for part in target.split("\\"))):
+        raise ValueError(f"Unsupported junction target: {path} -> {raw}")
+    try:
+        relative = target_path.relative_to(junction_root or root)
+    except ValueError as exc:
+        raise ValueError(f"Junction target is outside the selected tree: {path} -> {raw}") from exc
+    # In a renamed backup, use its own physical directory members. The old raw
+    # target may already resolve to NEW through the compatibility root junction.
+    current = root
+    for name in relative.parts:
+        current = current / name
+        info = os.lstat(nt.wide(current))
+        if (info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                or not stat.S_ISDIR(info.st_mode)):
+            raise ValueError(f"Junction target must be a physical directory in this tree: {path} -> {raw}")
+    # Canonical spelling also accepts the ordinary NTFS case-insensitive aliases
+    # that package managers may store in a junction's absolute target.
+    relative = nt.physical(current).relative_to(nt.physical(root))
+    return relative.as_posix(), raw
+
+
+def record(path, info, with_hash, *, root=None, junction_root=None):
+    junction = bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
     directory = stat.S_ISDIR(info.st_mode)
-    data = dict(type="dir" if directory else "file", size=0 if directory else info.st_size,
+    data = dict(type="junction" if junction else "dir" if directory else "file",
+                size=0 if directory else info.st_size,
                 attrs=nt.attributes(path), mtime_ns=info.st_mtime_ns,
                 identity=[info.st_dev, info.st_ino], link_count=info.st_nlink)
-    data["security"], data["protected"] = nt.security(path)
-    data["streams"] = stream_record(path, with_hash)
+    data["security"], data["protected"] = nt.security(path, nofollow=junction)
+    if junction:
+        if root is None:
+            raise ValueError("A pinned tree root is required to inspect a junction")
+        data["junction_target"], data["junction_raw_target"] = junction_target(
+            root, path, junction_root=junction_root)
+        data["junction_tag"] = info.st_reparse_tag
+        data["streams"] = {}
+        if nt.junction_streams(path):
+            raise ValueError(f"Named streams on junction objects require separate handling: {path}")
+    else:
+        data["streams"] = stream_record(path, with_hash)
     if with_hash and not directory:
         data["sha256"] = read_hash(nt.wide(path))
     if signature(os.lstat(nt.wide(path))) != signature(info) or nt.attributes(path) != data["attrs"]:
@@ -113,8 +159,9 @@ def record(path, info, with_hash):
     return data
 
 
-def snapshot(root, with_hash):
-    return {rel: record(path, st, with_hash) for rel, path, st in visit(root)}
+def snapshot(root, with_hash, *, junction_root=None):
+    return {rel: record(path, st, with_hash, root=root, junction_root=junction_root)
+            for rel, path, st in visit(root)}
 
 
 def metadata(row):
@@ -187,7 +234,8 @@ def verify_manifest(root, manifest, snapshot_tree, exceptions):
     return live
 
 
-def recheck_verified_copy(original, target, evidence, *, renamed, pointer_exceptions):
+def recheck_verified_copy(original, target, evidence, *, renamed, pointer_exceptions,
+                          source_junction_root=None):
     snapshot_tree = snapshot
     if sys.platform == "darwin":
         from mac_tree import snapshot as snapshot_tree
@@ -195,23 +243,31 @@ def recheck_verified_copy(original, target, evidence, *, renamed, pointer_except
     stem = evidence["report"].removesuffix("-verify.json")
     # Renaming the original can change its APFS root ctime, even without any writes.
     original_exceptions = {".": ("ctime_ns",)} if renamed else {}
+    original_snapshot = snapshot_tree
+    if os.name == "nt":
+        original_snapshot = partial(snapshot_tree, junction_root=source_junction_root)
     original_live = verify_manifest(original, directory / (stem + "-source.jsonl.gz"),
-                                    snapshot_tree, original_exceptions)
+                                    original_snapshot, original_exceptions)
     target_live = verify_manifest(target, directory / (stem + "-destination.jsonl.gz"),
                                   snapshot_tree, pointer_exceptions)
     # Revisit metadata after hashing both trees so writes during the other scan
     # can also stop the cutover.
-    for root, live in ((original, original_live), (target, target_live)):
-        changes = changed_since(live, snapshot_tree(root, False))
+    for root, live, scan in ((original, original_live, original_snapshot),
+                             (target, target_live, snapshot_tree)):
+        changes = changed_since(live, scan(root, False))
         if changes:
             raise ValueError(f"切换复核期间文件发生变化：{root} / {changes[0]}")
 
 
 def summarize(rows):
-    return {"files": sum(r["type"] == "file" for r in rows.values()),
-            "directories_including_root": sum(r["type"] == "dir" for r in rows.values()),
-            "default_stream_bytes": sum(r["size"] for r in rows.values()),
-            "named_streams": sum(len(r["streams"]) for r in rows.values())}
+    summary = {"files": sum(r["type"] == "file" for r in rows.values()),
+               "directories_including_root": sum(r["type"] == "dir" for r in rows.values()),
+               "default_stream_bytes": sum(r["size"] for r in rows.values()),
+               "named_streams": sum(len(r["streams"]) for r in rows.values())}
+    junctions = sum(r["type"] == "junction" for r in rows.values())
+    if junctions:
+        summary["junctions"] = junctions
+    return summary
 
 
 def differing(a, b, rel):
@@ -221,14 +277,16 @@ def differing(a, b, rel):
     return fields
 
 
-def verify(src, dst, audit, report):
-    a = snapshot(src, True)
+def verify(src, dst, audit, report, *, source_junction_root=None):
+    source_snapshot = partial(snapshot, junction_root=source_junction_root)
+    a = source_snapshot(src, True)
     b = snapshot(dst, True)
     for label, rows in (("source", a), ("destination", b)):
         save_manifest(audit / (report["run"] + "-" + label + ".jsonl.gz"), rows)
     changes = {}
-    for label, root, rows in (("source", src, a), ("destination", dst, b)):
-        paths = changed_since(rows, snapshot(root, False))
+    for label, root, rows, scan in (("source", src, a, source_snapshot),
+                                    ("destination", dst, b, snapshot)):
+        paths = changed_since(rows, scan(root, False))
         if paths:
             changes[label + "_changed_during_verification"] = paths
     for field, paths in (("source_only", a.keys() - b.keys()), ("destination_only", b.keys() - a.keys())):
@@ -311,6 +369,8 @@ def capacity(rows, dst, report, present_ids=(), existing_dirs=()):
     counted = set(present_ids)
     remaining = 0
     for name, row in rows.items():
+        if row["type"] == "junction":
+            continue
         iid = tuple(row["identity"])
         if row["type"] == "file" and iid in counted:
             continue
@@ -356,7 +416,12 @@ def copy(src, dst, audit, report):
     planned_files = defaultdict(list)
     for k, info in dest_items.items():
         srcrow = rows[k]
-        if stat.S_ISDIR(info.st_mode):
+        if info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            actual = record(dst / k, info, True, root=dst)
+            if (srcrow["type"] != "junction" or owned.get(k) != actual["identity"]
+                    or differing(srcrow, actual, k)):
+                raise ValueError(f"Unowned/changed candidate junction: {k}")
+        elif stat.S_ISDIR(info.st_mode):
             if srcrow["type"] != "dir" or owned.get(k) != [info.st_dev, info.st_ino]:
                 raise ValueError(f"Unowned/changed candidate directory: {k}")
         else:
@@ -383,13 +448,17 @@ def copy(src, dst, audit, report):
         capacity(rows, dst, report, anchors, {k for k in dest_items if k in owned})
 
     directories = []
+    junctions = []
     with journal.open("a", encoding="utf-8") as entries:
         for rel, row in rows.items():
             s, d = src / rel, dst / rel
             guard_parent(src, s, src_dirs)
             guard_parent(dst, d, owned)
-            if object_id(s) != row["identity"]:
+            if object_id(s, allow_junction=row["type"] == "junction") != row["identity"]:
                 raise ValueError(f"Source entry changed: {s}")
+            if row["type"] == "junction":
+                junctions.append(rel)
+                continue
             directory = row["type"] == "dir"
             if directory:
                 directories.append(rel)
@@ -421,6 +490,25 @@ def copy(src, dst, audit, report):
             nt.write_attrs(d, row["attrs"])
             anchors[iid] = d
             anchor_ids[iid] = object_id(d)
+        # All physical targets now exist. A pnpm package can refer back to an
+        # ancestor package without making the copy traversal recursive.
+        for rel in junctions:
+            s, d, row = src / rel, dst / rel, rows[rel]
+            guard_parent(src, s, src_dirs)
+            guard_parent(dst, d, owned)
+            if object_id(s, allow_junction=True) != row["identity"]:
+                raise ValueError(f"Source junction changed: {s}")
+            target = dst / row["junction_target"]
+            guard_parent(dst, target, owned)
+            if object_id(target) != owned.get(row["junction_target"]):
+                raise ValueError(f"Candidate junction target changed: {target}")
+            if rel in dest_items:
+                continue
+            nt.create_junction(d, target, s)
+            owned[rel] = object_id(d, allow_junction=True)
+            entries.write(json.dumps([rel, owned[rel]], ensure_ascii=True) + "\n")
+            entries.flush()
+            nt.junction_metadata(s, d, row["mtime_ns"], row["attrs"])
     for rel in reversed(directories):
         d, row = dst / rel, rows[rel]
         guard_parent(dst, d, owned)
@@ -467,10 +555,13 @@ def main():
     if not src.is_dir() or not dst.parent.is_dir() or not audit.parent.is_dir():
         raise ValueError("Source and the destination/audit parent directories must already exist")
     checkpoint = audit.parent / "run.json"
+    source_junction_root = None
     if checkpoint.is_file():
         config = json.loads(checkpoint.read_text(encoding="utf-8"))
         if str(src) not in (config.get("source"), config.get("backup")) or str(dst) != config.get("target"):
             raise ValueError("Paths differ from this migration's checkpoint.")
+        if str(src) == config.get("backup"):
+            source_junction_root = Path(config["source"])
         pinned = config.get("volumes")  # v1 checkpoints predate volume pinning
         if pinned is not None and (nt.physical(src).drive.casefold() != pinned["source_volume"]
                                   or nt.physical(dst).drive.casefold() != pinned["target_volume"]):
@@ -481,7 +572,10 @@ def main():
         report = {"run": tag, "action": args.action, "source": str(src), "destination": str(dst)}
         dump_json(audit / (tag + "-started.json"), report)
         try:
-            success = (copy if args.action == "copy" else verify)(src, dst, audit, report)
+            if args.action == "copy":
+                success = copy(src, dst, audit, report)
+            else:
+                success = verify(src, dst, audit, report, source_junction_root=source_junction_root)
             report["status"] = "passed" if success else "differences"
         except (OSError, ValueError, RuntimeError) as exc:
             report.update(status="stopped", error=str(exc))

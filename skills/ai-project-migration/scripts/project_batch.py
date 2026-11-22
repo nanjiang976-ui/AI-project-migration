@@ -339,7 +339,8 @@ def preflight_cutover(batch, plan, needs_plans=False):
             require(cutover.real_dir(original) == root["source_id"], f"原件身份变化：{original}")
             pending = git_check.verify(Path(root["target"]), snap, allow_source=not needs_plans)
             recheck_verified_copy(original, Path(root["target"]), evidence, renamed=status == "renamed",
-                                  pointer_exceptions=git_check.repair_metadata_exceptions(snap, pending))
+                                  pointer_exceptions=git_check.repair_metadata_exceptions(snap, pending),
+                                  source_junction_root=Path(root["source"]))
         items.append((root, run, status))
     return items
 

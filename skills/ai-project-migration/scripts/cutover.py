@@ -342,7 +342,7 @@ def apply_locked(args):
         original = backup if phase == "renamed" else source
         exceptions = verified_git_exceptions(data, source, target)
         recheck_verified_copy(original, target, evidence, renamed=phase == "renamed",
-                              pointer_exceptions=exceptions)
+                              pointer_exceptions=exceptions, source_junction_root=source)
         require(observe(data, source, target, backup) == phase, "切换复核期间目录状态发生变化")
     if phase == "ready":
         rename_exclusive(source, backup)
