@@ -6,10 +6,59 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+import migration_ntfs as nt
 import tree_copy
 
 
 class DependencyHardlinkChecks:
+    def normal_attribute_hardlink_groups(self):
+        groups = []
+        for index, payload in enumerate((b"", b"hardlink file contents\n")):
+            anchor = self.old / "hardlink-data" / f"group-{index}.bin"
+            anchor.parent.mkdir(exist_ok=True)
+            anchor.write_bytes(payload)
+            members = [anchor]
+            for directory in ("aliases-a", "aliases-b", "nested/aliases-c"):
+                alias = self.old / directory / f"group-{index}.bin"
+                alias.parent.mkdir(parents=True, exist_ok=True)
+                os.link(anchor, alias)
+                members.append(alias)
+            # NTFS sets Archive while links are added. Clear it after the source
+            # group is complete, matching package-store files marked Normal.
+            nt.write_attrs(anchor, 0x80)
+            self.assertTrue(all(nt.attributes(member) == 0x80 for member in members))
+            groups.append(members)
+        return groups
+
+    def assert_copied_normal_hardlink_groups(self, groups):
+        for members in groups:
+            copies = [self.new / member.relative_to(self.old) for member in members]
+            for copied in copies:
+                self.assertEqual(nt.attributes(copied), 0x80)
+                self.assertTrue(copied.samefile(copies[0]))
+            self.assertEqual(copies[0].stat().st_nlink, len(members))
+            self.assertEqual(copies[0].read_bytes(), members[0].read_bytes())
+
+    def test_copy_hardlink_groups_preserve_normal_attribute_after_all_aliases(self):
+        groups = self.normal_attribute_hardlink_groups()
+        self.audit.mkdir()
+        self.copy_cli("copy")
+        self.assert_copied_normal_hardlink_groups(groups)
+        self.assertEqual(self.copy_cli("verify")["differences"], {})
+
+    def test_dependency_materialization_preserves_normal_attribute_for_internal_and_external_groups(self):
+        groups = self.normal_attribute_hardlink_groups()
+        external, first, second = self.dependency_hardlink_fixture()
+        nt.write_attrs(external, 0x80)
+        self.start_materialized_dependency_run()
+        self.copy_cli("copy")
+        self.assert_copied_normal_hardlink_groups(groups)
+        for relative in (first, second):
+            self.assertEqual(nt.attributes(self.new / relative), 0x80)
+        self.assertTrue((self.new / first).samefile(self.new / second))
+        self.assertFalse((self.new / first).samefile(external))
+        self.assertEqual(self.copy_cli("verify")["differences"], {})
+
     def dependency_hardlink_fixture(self, root=None):
         root = root or self.old
         store = self.left / ("dependency-store-" + uuid4().hex[:8])

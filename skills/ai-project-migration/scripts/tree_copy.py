@@ -564,6 +564,19 @@ def copy(src, dst, audit, report, *, materialize_dependency_hardlinks=False):
             entries.write(json.dumps([rel, owned[rel]], ensure_ascii=True) + "\n")
             entries.flush()
             nt.junction_metadata(s, d, row["mtime_ns"], row["attrs"])
+    # Adding a hardlink can set ARCHIVE on its shared file object. Restore the
+    # expected attributes once all names exist, using each hardlink group once.
+    for members in groups:
+        iid = tuple(rows[members[0]]["identity"])
+        d = anchors[iid]
+        rel = d.relative_to(dst).as_posix()
+        s, row = src / rel, rows[rel]
+        guard_parent(src, s, src_dirs)
+        guard_parent(dst, d, owned)
+        if (object_id(s) != row["identity"] or object_id(d) != anchor_ids[iid]
+                or anchor_ids[iid] == row["identity"]):
+            raise ValueError(f"File identity changed before restoring attributes: {d}")
+        nt.write_attrs(d, row["attrs"])
     for rel in reversed(directories):
         d, row = dst / rel, rows[rel]
         guard_parent(dst, d, owned)
