@@ -132,4 +132,8 @@ The skill lists sources and shared references before copying. Use the batch work
 
 Once verification passes, manually remove the physical backup from the original drive. Keep the link at the original path, a directory junction on Windows or a directory symlink on macOS, so old chats can still reach the destination. Check each relevant chat's original ID, history, and working directory. Then use representative old chats from each affected project to test actual reads and writes for its migrated sources. Report the number of chats checked separately from what the read and write tests covered. Keep the corresponding backup while any folder or chat still needs verification.
 
+### Why does an old chat still show its original working directory after migration?
+
+For example, Codex may resume an old chat with its original working directory on the C drive after the project's primary folder moves to the D drive. The verified link at the old path (a directory junction on Windows or a directory symlink on macOS) leads to the files in the destination folder. The verification report records which old chats passed read and write tests.
+
 [Full guide](docs/guide.en.md) · [Compatibility and test evidence](docs/guide.en.md#compatibility) · [Troubleshooting](docs/guide.en.md#faq) · [Report an issue](https://github.com/nanjiang976-ui/AI-project-migration/issues) · [MIT license](LICENSE)
