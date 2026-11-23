@@ -36,7 +36,7 @@
 ```json
 {
   "sources": [
-    {"source": "E:/Example/Demo", "target": "F:/Example/Demo", "project_ids": ["demo"]},
+    {"source": "E:/Example/Demo", "target": "F:/Example/Demo", "project_ids": ["demo"], "materialize_dependency_hardlinks": false},
     {"source": "E:/Example/Assets", "target": "F:/Example/Assets", "project_ids": ["demo", "library"]}
   ],
   "allow_same_volume": false
@@ -44,6 +44,8 @@
 ```
 
 只迁一个独享次要源时，项目快照仍包含完整来源清单。选择文件的 `sources` 只填该次要源和它的目标，`project_ids` 只填它所属的项目。主要来源和其他未选来源留在原配置中。
+
+Windows 中，依赖文件与树外 pnpm 存储共享硬链接时，须先说明跨卷需要在目标建立独立副本。用户明确同意后，只对获准来源将 `materialize_dependency_hardlinks` 设为 `true`。工具仅接受全部树内成员均位于 `node_modules` 的外部组，保留项目内部硬链接分组，并把选项绑定至子运行、所有权记录、核验回执和离线计划。目标存在树外硬链接时仍停止。缺失该字段等同 `false`。
 
 源和目标以最终实际实体为准。同盘移动须像单目录流程一样明确告知用户空间影响，经确认才设置 `allow_same_volume`。如果目标已存在于旧的单目录迁移，沿旧检查点完成这一项，剩余明确选中的目录另建批次。保留两边和已复制的候选文件，避免重复搬运或借用另一个运行的回执。发现未支持的重解析点时提示具体路径，先由用户决定如何保全，禁止静默跳过、展开或清理。
 

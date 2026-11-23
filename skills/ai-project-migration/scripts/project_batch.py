@@ -13,7 +13,7 @@ from uuid import uuid4
 import cutover
 import git_check
 from run_record import timestamp, volumes
-from tree_copy import exclusive_lock, recheck_verified_copy
+from tree_copy import POLICY_KEY, exclusive_lock, read_hardlink_policy, recheck_verified_copy
 
 HERE = Path(__file__).resolve().parent
 PLAN = "batch.json"
@@ -133,6 +133,8 @@ def draft(snapshot, selection):
     roots = []
     touched = {}
     for index, choice in enumerate(requests["sources"], 1):
+        materialize = read_hardlink_policy(choice)
+        require(not materialize or os.name == "nt", "依赖硬链接独立复制仅支持 Windows NTFS。")
         chosen = usable_path(choice["source"])
         require(any(key(item["path"]) == key(chosen) for _, item, _, _ in inventory),
                 f"所选来源不在已核实的 Codex 项目清单中：{chosen}")
@@ -163,6 +165,8 @@ def draft(snapshot, selection):
         root = dict(id=f"source-{index:02}", source=str(source), target=str(target), backup=str(backup),
                     source_id=ident, volumes=vol, project_ids=[pid for pid, _ in refs],
                     references=[{"project_id": pid, **item} for pid, item in refs])
+        if materialize:
+            root[POLICY_KEY] = True
         roots.append(root)
         for pid, item in refs:
             touched.setdefault(pid, {})[key(item["path"])] = str(target)
@@ -218,17 +222,23 @@ def open_plan(batch):
 
 
 def expected_owner(batch, plan, root):
-    return {"batch": str(batch), "id": root["id"], "batch_id": plan["batch_id"]}
+    owner = {"batch": str(batch), "id": root["id"], "batch_id": plan["batch_id"]}
+    if read_hardlink_policy(root):
+        owner[POLICY_KEY] = True
+    return owner
 
 
 def child_directory(batch, plan, root):
     run = Path(root["run"])
     require(run == batch / root["id"], "目录子记录不属于此批次")
     cutover.plain_chain(run)
-    require(read(run / OWNER) == expected_owner(batch, plan, root), "目录子记录归属不符")
+    owner = read(run / OWNER)
+    require(read_hardlink_policy(owner) == read_hardlink_policy(root)
+            and owner == expected_owner(batch, plan, root), "目录子记录归属或依赖复制选项不符")
     cfg = read(run / "run.json")
     require(all(cfg[k] == root[k] for k in ("source", "target", "backup", "volumes")),
             "目录子记录的路径或磁盘不符")
+    require(read_hardlink_policy(cfg) == read_hardlink_policy(root), "目录子记录的依赖复制选项不符")
     return run
 
 
@@ -243,10 +253,13 @@ def init_child(batch, plan, root):
         cutover.save_exclusive(run / OWNER, owner)
     require(read(run / OWNER) == owner, "目录记录归属不符")
     if not os.path.lexists(run / "run.json"):
-        cutover.save_exclusive(run / "run.json", dict(
+        config = dict(
             version=2, migration_id=str(uuid4()), host="codex", project_id=root["project_ids"][0],
             source=root["source"], target=root["target"], backup=root["backup"], volumes=root["volumes"],
-            started=timestamp()))
+            started=timestamp())
+        if read_hardlink_policy(root):
+            config[POLICY_KEY] = True
+        cutover.save_exclusive(run / "run.json", config)
     return child_directory(batch, plan, root)
 
 

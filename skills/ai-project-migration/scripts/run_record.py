@@ -10,6 +10,7 @@ import sys
 from uuid import UUID, uuid4
 
 from cutover import MigrationError, local_path, real_dir, save_exclusive, verify_link_target
+from tree_copy import POLICY_KEY, read_hardlink_policy
 
 
 FINISHED = {"passed", "not_applicable", "unverified"}
@@ -54,6 +55,9 @@ def volumes(old, new):
 
 
 def create_run(args, run):
+    materialize = read_hardlink_policy(vars(args))
+    if materialize and os.name != "nt":
+        raise ValueError("Dependency hardlink materialization requires Windows NTFS.")
     old, new = absolute(args.source), absolute(args.target)
     backup = old.with_name(old.name + "_迁移备份")
     if not old.is_dir() or old.resolve(strict=True) != old or new.resolve() != new:
@@ -83,9 +87,12 @@ def create_run(args, run):
         nt.restore_security(old, run, True)
     else:
         mac_fs.create_private(run)
-    save_exclusive(run / "run.json", dict(version=2, migration_id=str(uuid4()), host=args.host,
+    config = dict(version=2, migration_id=str(uuid4()), host=args.host,
                    project_id=args.project_id or None, source=str(old), target=str(new),
-                   backup=str(backup), started=timestamp(), volumes=vol))
+                   backup=str(backup), started=timestamp(), volumes=vol)
+    if materialize:
+        config[POLICY_KEY] = True
+    save_exclusive(run / "run.json", config)
 
 
 def read_probe(config, run, binding):
@@ -241,6 +248,9 @@ def verify_backup_files(config, run, probe_wrote, *, batch=False):
     expected = dict(action="verify", run=tag, source=str(backup), destination=str(target))
     if any(record.get(key) != value for record in (begun, comparison) for key, value in expected.items()):
         raise ValueError("最新复核的现场与本次备份不匹配")
+    if any(read_hardlink_policy(record) != read_hardlink_policy(config)
+           for record in (begun, comparison)):
+        raise ValueError("备份复核的依赖复制选项与迁移授权不匹配")
     diffs = comparison.get("differences")
     if comparison.get("status") not in ("passed", "differences") or not isinstance(diffs, dict):
         raise ValueError("最近一次备份核验未完成")
@@ -350,6 +360,8 @@ def main():
     start.add_argument("--project-id")
     start.add_argument("--host", choices=("codex", "claude-code", "generic"), default="codex")
     start.add_argument("--allow-same-volume", action="store_true")
+    start.add_argument("--materialize-dependency-hardlinks", action="store_true",
+                       help="Copy approved node_modules external hardlinks as independent target files")
     show = commands.add_parser("show")
     mark = commands.add_parser("mark")
     reopen = commands.add_parser("reopen")

@@ -16,14 +16,15 @@ import migration_ntfs as nt
 import tree_copy
 from batch_checks import ProjectBatchChecks
 from cutover_checks import CutoverChecks
+from dependency_hardlink_checks import DependencyHardlinkChecks
 from junction_checks import JunctionChecks
 from preflight_checks import PreflightChecks
 from record_checks import RecordChecks
 from resume_checks import ResumeInspectionChecks
 
 
-class MigrationTests(CutoverChecks, JunctionChecks, PreflightChecks, ProjectBatchChecks,
-                     RecordChecks, ResumeInspectionChecks, unittest.TestCase):
+class MigrationTests(CutoverChecks, DependencyHardlinkChecks, JunctionChecks, PreflightChecks,
+                     ProjectBatchChecks, RecordChecks, ResumeInspectionChecks, unittest.TestCase):
     @classmethod
     def configure(cls, scripts, source_run, target_run):
         cls.scripts = scripts

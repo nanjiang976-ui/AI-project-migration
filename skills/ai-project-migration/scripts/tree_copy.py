@@ -22,6 +22,19 @@ SETTABLE = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x80 | 0x100 | 0x2000
 COMPARE_FIELDS = ("type", "size", "sha256", "streams", "attrs", "mtime_ns", "security",
                   "junction_tag", "junction_target")
 CHUNK = 2**20
+POLICY_KEY = "materialize_dependency_hardlinks"
+
+
+def read_hardlink_policy(record):
+    value = record.get(POLICY_KEY, False)
+    if type(value) is not bool:
+        raise ValueError(f"{POLICY_KEY} must be an explicit boolean")
+    return value
+
+
+def hardlink_policy_fields(enabled):
+    read_hardlink_policy({POLICY_KEY: enabled})
+    return {POLICY_KEY: True} if enabled else {}
 
 
 def checked_root(arg):
@@ -201,6 +214,28 @@ def link_groups(rows):
     return groups, sorted(external)
 
 
+def inspect_hardlinks(root):
+    """Inspect native identities before spending time hashing file contents."""
+    rows = {rel: {"type": "file", "identity": [info.st_dev, info.st_ino],
+                  "link_count": info.st_nlink}
+            for rel, _, info in visit(root) if stat.S_ISREG(info.st_mode)}
+    return link_groups(rows)
+
+
+def check_source_hardlinks(external, materialize, report):
+    if external and (not materialize or any(
+            "node_modules" not in name.casefold().split("/") for members in external for name in members)):
+        report["external_hardlink_references"] = external
+        raise ValueError("Source files have hardlinks outside the selected project; "
+                         "only explicitly approved node_modules groups can be materialized")
+
+
+def materialization_evidence(source_external, destination_external=()):
+    return dict(scope="node_modules", source_external_groups=len(source_external),
+                source_external_entries=sum(len(members) for members in source_external),
+                destination_external_groups=len(destination_external))
+
+
 def dump_json(path, data):
     with path.open("x", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=True, indent=2)
@@ -277,7 +312,15 @@ def differing(a, b, rel):
     return fields
 
 
-def verify(src, dst, audit, report, *, source_junction_root=None):
+def verify(src, dst, audit, report, *, source_junction_root=None,
+           materialize_dependency_hardlinks=False):
+    report.update(hardlink_policy_fields(materialize_dependency_hardlinks))
+    _, external = inspect_hardlinks(src)
+    check_source_hardlinks(external, materialize_dependency_hardlinks, report)
+    _, destination_external = inspect_hardlinks(dst)
+    if destination_external:
+        report["external_hardlink_references"] = {"destination": destination_external}
+        raise ValueError("Destination files have hardlinks outside the candidate")
     source_snapshot = partial(snapshot, junction_root=source_junction_root)
     a = source_snapshot(src, True)
     b = snapshot(dst, True)
@@ -302,8 +345,11 @@ def verify(src, dst, audit, report, *, source_junction_root=None):
     if ga != gb:
         changes["missing_internal_link_groups"] = sorted(ga - gb)
         changes["extra_internal_link_groups"] = sorted(gb - ga)
-    if xa or xb:
+    check_source_hardlinks(xa, materialize_dependency_hardlinks, report)
+    if xb:
         changes["external_hardlink_references"] = {"source": xa, "destination": xb}
+    if materialize_dependency_hardlinks:
+        report["dependency_hardlink_materialization"] = materialization_evidence(xa, xb)
     report.update(source_summary=summarize(a), destination_summary=summarize(b),
                   internal_hardlink_groups={"source": len(ga), "destination": len(gb)},
                   differences=changes)
@@ -334,13 +380,16 @@ def exclusive_lock(audit):
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def prepare_copy(src, dst, audit):
+def prepare_copy(src, dst, audit, *, materialize_dependency_hardlinks=False):
     state = audit / "owner.json"
     source_key = {"source": str(src), "destination": str(dst), "source_id": object_id(src)}
+    source_key.update(hardlink_policy_fields(materialize_dependency_hardlinks))
     if os.path.lexists(dst):
         if not state.is_file():
             raise FileExistsError("Destination already exists without this run's ownership record: " + str(dst))
         saved = json.loads(state.read_text(encoding="utf-8"))
+        if not read_hardlink_policy(saved):
+            saved.pop(POLICY_KEY, None)
         if {**source_key, "destination_id": object_id(dst)} != saved:
             raise ValueError("Destination or source identity changed; use a new candidate")
     else:
@@ -386,18 +435,24 @@ def capacity(rows, dst, report, present_ids=(), existing_dirs=()):
         raise OSError(f"Target space is insufficient: estimated {remaining} bytes, available {free}")
 
 
-def copy(src, dst, audit, report):
+def copy(src, dst, audit, report, *, materialize_dependency_hardlinks=False):
+    report.update(hardlink_policy_fields(materialize_dependency_hardlinks))
+    _, external = inspect_hardlinks(src)
+    check_source_hardlinks(external, materialize_dependency_hardlinks, report)
     rows = snapshot(src, True)
     save_manifest(audit / (report["run"] + "-source.jsonl.gz"), rows)
     groups, external = link_groups(rows)
     report.update(source_summary=summarize(rows), internal_hardlink_groups=len(groups))
-    if external:
-        report["external_hardlink_references"] = external
-        raise ValueError("Source files have hardlinks outside the selected project; review their scope")
+    check_source_hardlinks(external, materialize_dependency_hardlinks, report)
+    if materialize_dependency_hardlinks:
+        report["dependency_hardlink_materialization"] = materialization_evidence(external)
     fresh = not os.path.lexists(dst)
     if fresh:
         capacity(rows, dst, report)
-    prepare_copy(src, dst, audit)
+    if materialize_dependency_hardlinks:
+        prepare_copy(src, dst, audit, materialize_dependency_hardlinks=True)
+    else:
+        prepare_copy(src, dst, audit)
     src_dirs = {k: r["identity"] for k, r in rows.items() if r["type"] == "dir"}
     dest_items = {k: s for k, _, s in visit(dst)}
     extras = sorted(dest_items.keys() - rows.keys())
@@ -544,11 +599,13 @@ def main():
         return mac_main()
     if os.name != "nt":
         raise ValueError("Supported platforms: Windows NTFS and macOS APFS")
+    from cutover import MigrationError, ordinary_record
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["copy", "verify"])
     parser.add_argument("source")
     parser.add_argument("destination")
     parser.add_argument("--audit", required=True)
+    parser.add_argument("--materialize-dependency-hardlinks", action="store_true")
     args = parser.parse_args()
     src, dst, audit = map(checked_root, (args.source, args.destination, args.audit))
     check_disjoint((src, dst, audit))
@@ -556,8 +613,13 @@ def main():
         raise ValueError("Source and the destination/audit parent directories must already exist")
     checkpoint = audit.parent / "run.json"
     source_junction_root = None
+    materialize_dependency_hardlinks = False
     if checkpoint.is_file():
-        config = json.loads(checkpoint.read_text(encoding="utf-8"))
+        try:
+            config, _ = ordinary_record(checkpoint)
+        except MigrationError as exc:
+            raise ValueError(str(exc)) from exc
+        materialize_dependency_hardlinks = read_hardlink_policy(config)
         if str(src) not in (config.get("source"), config.get("backup")) or str(dst) != config.get("target"):
             raise ValueError("Paths differ from this migration's checkpoint.")
         if str(src) == config.get("backup"):
@@ -566,16 +628,40 @@ def main():
         if pinned is not None and (nt.physical(src).drive.casefold() != pinned["source_volume"]
                                   or nt.physical(dst).drive.casefold() != pinned["target_volume"]):
             raise ValueError("Volume identity changed after preflight. Recheck the source and target.")
+    if args.materialize_dependency_hardlinks and not materialize_dependency_hardlinks:
+        raise ValueError("Dependency hardlink materialization needs the matching approved run.json")
+    if args.action == "verify":
+        owner_directory = audit
+        if materialize_dependency_hardlinks and str(src) == config.get("backup"):
+            from cutover import read_plan
+            try:
+                plan, _, _, _ = read_plan(audit.parent / "cutover-plan.json")
+            except MigrationError as exc:
+                raise ValueError(str(exc)) from exc
+            owner_directory = Path(plan["copy_evidence"]["directory"])
+        owner_path = owner_directory / "owner.json"
+        if os.path.lexists(owner_path):
+            try:
+                owner, _ = ordinary_record(owner_path)
+            except MigrationError as exc:
+                raise ValueError(str(exc)) from exc
+            if read_hardlink_policy(owner) != materialize_dependency_hardlinks:
+                raise ValueError("Verification policy differs from the managed copy owner")
+        elif materialize_dependency_hardlinks:
+            raise ValueError("Dependency hardlink verification needs the managed copy owner")
     prepare_audit(audit, src)
     with exclusive_lock(audit):
         tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:10]
         report = {"run": tag, "action": args.action, "source": str(src), "destination": str(dst)}
+        report.update(hardlink_policy_fields(materialize_dependency_hardlinks))
         dump_json(audit / (tag + "-started.json"), report)
         try:
             if args.action == "copy":
-                success = copy(src, dst, audit, report)
+                success = copy(src, dst, audit, report,
+                               materialize_dependency_hardlinks=materialize_dependency_hardlinks)
             else:
-                success = verify(src, dst, audit, report, source_junction_root=source_junction_root)
+                success = verify(src, dst, audit, report, source_junction_root=source_junction_root,
+                                 materialize_dependency_hardlinks=materialize_dependency_hardlinks)
             report["status"] = "passed" if success else "differences"
         except (OSError, ValueError, RuntimeError) as exc:
             report.update(status="stopped", error=str(exc))

@@ -176,10 +176,20 @@ def ordinary_record(path):
 
 
 def verified_copy(source, target, audit, directory):
+    from tree_copy import read_hardlink_policy
     directory = local_path(directory)
     require(directory.parent == audit, "复制审计目录必须直接位于本次迁移审计目录下")
     plain_chain(directory)
     owner, owner_hash = ordinary_record(directory / "owner.json")
+    materialize = read_hardlink_policy(owner)
+    config_file = audit / "run.json"
+    if stat_if_present(config_file) is not None:
+        config, _ = ordinary_record(config_file)
+        require((Path(config.get("source", "")), Path(config.get("target", ""))) == (source, target)
+                and read_hardlink_policy(config) == materialize,
+                "复制模式与已批准的迁移记录不一致")
+    else:
+        require(not materialize, "依赖硬链接物化需要已批准的迁移记录")
     require(Path(owner["source"]) == source and Path(owner["destination"]) == target,
             "复制记录与计划中的原路径或目标路径不符")
     require(owner["destination_id"] == real_dir(target) and owner["source_id"] != owner["destination_id"],
@@ -196,6 +206,18 @@ def verified_copy(source, target, audit, directory):
     receipt = directory / (tag + "-verify.json")
     require(stat_if_present(receipt) is not None, "最近的校验尚未结束，请等待或重做独立核验")
     report, report_hash = ordinary_record(receipt)
+    require(read_hardlink_policy(begun) == materialize and read_hardlink_policy(report) == materialize,
+            "复制归属、核验启动记录及回执中的依赖硬链接模式不一致")
+    if materialize:
+        details = report.get("dependency_hardlink_materialization", {})
+        require(isinstance(details, dict), "依赖硬链接物化证据格式不完整")
+        counts = (details.get("source_external_groups"), details.get("source_external_entries"),
+                  details.get("destination_external_groups"))
+        require(details.get("scope") == "node_modules"
+                and all(type(count) is int and count >= 0 for count in counts)
+                and counts[2] == 0 and counts[1] >= counts[0]
+                and (counts[0] == 0) == (counts[1] == 0),
+                "核验回执缺少完整的依赖硬链接物化证据")
     require(all(report.get(k) == begun[k] for k in ("run", "action", "source", "destination"))
             and report.get("status") == "passed" and report.get("differences") == {}
             and report.get("source_summary") == report.get("destination_summary")
@@ -208,6 +230,7 @@ def verified_copy(source, target, audit, directory):
 
 
 def read_plan(filename):
+    from tree_copy import read_hardlink_policy
     filename = local_path(filename)
     require(filename.name == PLAN_NAME, f"需要本次迁移的 {PLAN_NAME}")
     plain_chain(filename.parent)
@@ -225,6 +248,8 @@ def read_plan(filename):
     require(real_dir(target) == data["target_id"], f"目标盘或目标目录的系统标识已改变：{target}")
     pinned = data["copy_evidence"]
     owner, current = verified_copy(source, target, audit, pinned["directory"])
+    require(read_hardlink_policy(data) == read_hardlink_policy(owner),
+            "离线计划的依赖硬链接模式与复制记录不一致")
     require(owner["source_id"] == data["source_id"] and owner["destination_id"] == data["target_id"]
             and current["directory_id"] == pinned["directory_id"]
             and current["owner_sha256"] == pinned["owner_sha256"],
@@ -278,6 +303,7 @@ def ps_literal(value):
 
 
 def prepare(args):
+    from tree_copy import hardlink_policy_fields, read_hardlink_policy
     source, target, backup, audit = checked_paths(args.source, args.target, args.audit)
     plan = audit / PLAN_NAME
     owner, evidence = verified_copy(source, target, audit, args.copy_audit)
@@ -289,6 +315,7 @@ def prepare(args):
                     audit=str(audit), source_id=owner["source_id"], target_id=owner["destination_id"],
                     copy_evidence=evidence,
                     audit_id=real_dir(audit), parent_id=real_dir(source.parent))
+        data.update(hardlink_policy_fields(read_hardlink_policy(owner)))
         observe(data, source, target, backup)
         save_exclusive(plan, data)
     existing, _, _, _ = read_plan(plan)
