@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -105,6 +107,68 @@ class MigrationTests(CutoverChecks, DependencyHardlinkChecks, JunctionChecks, Pr
 
     def git(self, root, *args):
         return self.command(["git", "-C", root, *args])
+
+    def _record_with_stat_change(self, path, before_changes, after_changes):
+        wide_path = nt.wide(path)
+        native_lstat = os.lstat
+        info = native_lstat(wide_path)
+        fields = {field: getattr(info, field) for field in (
+            "st_dev", "st_ino", "st_nlink", "st_size", "st_mtime_ns", "st_mode",
+            "st_reparse_tag", "st_file_attributes",
+        )}
+        before = SimpleNamespace(**(fields | before_changes))
+        after = SimpleNamespace(**(fields | after_changes))
+
+        def lstat(name, *args, **kwargs):
+            if name == wide_path:
+                return after
+            return native_lstat(name, *args, **kwargs)
+
+        with patch.object(tree_copy.os, "lstat", side_effect=lstat):
+            return tree_copy.record(path, before, True, root=self.old)
+
+    def test_record_accepts_physical_directory_index_size_changes(self):
+        attrs = os.lstat(nt.wide(self.old)).st_file_attributes
+        snapshots = (
+            ({"st_size": 0}, {"st_size": 4096}),
+            ({"st_size": 4096}, {"st_size": 0}),
+            ({"st_size": 0, "st_file_attributes": attrs},
+             {"st_size": 4096, "st_file_attributes": attrs ^ 0x10000000}),
+        )
+        for before, after in snapshots:
+            with self.subTest(before=before, after=after):
+                row = self._record_with_stat_change(self.old, before, after)
+                self.assertEqual((row["type"], row["size"]), ("dir", 0))
+
+    def test_record_rejects_physical_directory_metadata_changes(self):
+        info = os.lstat(nt.wide(self.old))
+        mutations = dict(st_dev=info.st_dev + 1, st_ino=info.st_ino + 1,
+                         st_nlink=info.st_nlink + 1, st_mtime_ns=info.st_mtime_ns + 100,
+                         st_mode=stat.S_IFREG | stat.S_IMODE(info.st_mode),
+                         st_file_attributes=info.st_file_attributes | stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        for field, value in mutations.items():
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "Changed during read"):
+                self._record_with_stat_change(self.old, {"st_size": 0}, {"st_size": 0, field: value})
+
+        attrs = nt.attributes(self.old)
+        with (
+            patch.object(nt, "attributes", side_effect=[attrs, attrs ^ stat.FILE_ATTRIBUTE_HIDDEN]),
+            self.assertRaisesRegex(RuntimeError, "Changed during read"),
+        ):
+            self._record_with_stat_change(self.old, {}, {})
+
+    def test_record_rejects_file_size_and_junction_metadata_changes(self):
+        file = self.old / "sample.txt"
+        target = self.old / "package"
+        target.mkdir()
+        junction = self.old / "package-alias"
+        CreateJunction(str(target), str(junction))
+        mutations = ((file, {"st_size": file.stat().st_size + 1}),
+                     (junction, {"st_size": junction.lstat().st_size + 4096}),
+                     (junction, {"st_reparse_tag": stat.IO_REPARSE_TAG_SYMLINK}))
+        for path, change in mutations:
+            with self.subTest(path=path.name, change=change), self.assertRaisesRegex(RuntimeError, "Changed during read"):
+                self._record_with_stat_change(path, {}, change)
 
     def test_copy_ntfs_objects(self):
         data = self.old / "sample.txt"

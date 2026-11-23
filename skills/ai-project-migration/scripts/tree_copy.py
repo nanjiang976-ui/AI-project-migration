@@ -79,7 +79,13 @@ def object_id(path, *, allow_junction=False):
 
 
 def signature(s):
-    return [s.st_dev, s.st_ino, s.st_nlink, s.st_size, s.st_mtime_ns]
+    kind = stat.S_IFMT(s.st_mode)
+    reparse_flag = s.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    ordinary_directory = kind == stat.S_IFDIR and not reparse_flag
+    # NTFS may return different sizes for a directory index. The manifest
+    # checks the directory entries and their metadata independently.
+    size = 0 if ordinary_directory else s.st_size
+    return [s.st_dev, s.st_ino, s.st_nlink, size, s.st_mtime_ns, kind, s.st_reparse_tag, reparse_flag]
 
 
 def read_hash(path):
