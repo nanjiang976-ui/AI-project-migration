@@ -48,7 +48,7 @@ cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-c
 cutover.py prepare --source OLD --target NEW --audit RUN --copy-audit RUN/tree-copy --mode auto
 ```
 
-只运行选择的一行 `prepare`，在用户退出前按[手动终端指引](terminal.md#offline-cutover)交付它生成的那一段离线命令、对应系统的图示及所选模式的操作顺序。预期输出包含准确的 FullName、Target、Backup 和对应的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
+只运行选择的一行 `prepare`，在用户退出前按[手动终端指引](terminal.md#offline-cutover)交付它生成的那一段离线命令、对应系统的图示、所选模式的操作顺序，以及执行后的回报和关窗说明。预期输出包含准确的 FullName、Target、Backup 和对应的 LinkType（Windows 为 Junction，macOS 为 SymbolicLink）。
 
 离线执行期间继续暂停两端写入。命令在改名前复核原目录和目标的最新成功校验清单。手动改名或上次停在改名后时，命令在建链接前复核已改名的备份和目标。发现变化便停止，保留两端及报错。还未改名时，先保全和核对各自的新改动，再独立校验并重试。已经改名时先做只读接续检查，需要恢复原名重验时按下方的回退流程处理。
 
