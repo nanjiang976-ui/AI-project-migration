@@ -133,10 +133,25 @@ def junction_target(root, path, *, junction_root=None):
     if (not target_path.is_absolute() or len(target_path.drive) != 2
             or any(part in (".", "..") for part in target.split("\\"))):
         raise ValueError(f"Unsupported junction target: {path} -> {raw}")
+    namespace = junction_root or root
     try:
-        relative = target_path.relative_to(junction_root or root)
+        relative = target_path.relative_to(namespace)
     except ValueError as exc:
         raise ValueError(f"Junction target is outside the selected tree: {path} -> {raw}") from exc
+    # WindowsPath comparisons fold case even in case-sensitive NTFS directories.
+    # Check the actual root for a differently spelled prefix before remapping it.
+    declared_root = Path(*target_path.parts[:len(namespace.parts)])
+    if declared_root.parts[1:] != namespace.parts[1:]:
+        identities = []
+        for spelling in (declared_root, namespace):
+            try:
+                identities.append(object_id(spelling, allow_junction=True))
+            except FileNotFoundError:
+                identities.append(None)
+        # Between rename and relinking, both old spellings can be absent. The
+        # backup is checked against the pinned manifest, including the raw target.
+        if identities[0] != identities[1] or (identities[0] is None and junction_root is None):
+            raise ValueError(f"Junction target is outside the selected tree: {path} -> {raw}")
     # In a renamed backup, use its own physical directory members. The old raw
     # target may already resolve to NEW through the compatibility root junction.
     current = root
@@ -230,7 +245,8 @@ def inspect_hardlinks(root):
 
 def check_source_hardlinks(external, materialize, report):
     if external and (not materialize or any(
-            "node_modules" not in name.casefold().split("/") for members in external for name in members)):
+            "node_modules" not in name.casefold().split("/")[:-1]
+            for members in external for name in members)):
         report["external_hardlink_references"] = external
         raise ValueError("Source files have hardlinks outside the selected project; "
                          "only explicitly approved node_modules groups can be materialized")

@@ -169,6 +169,18 @@ class DependencyHardlinkChecks:
         hashed.assert_not_called()
         self.assertFalse(os.path.lexists(self.new))
 
+    def test_dependency_materialization_rejects_file_named_node_modules_outside_scope(self):
+        external = self.left / "external-source-file.js"
+        external.write_bytes(b"outside allowed scope")
+        misleading = self.old / "docs" / "node_modules"
+        misleading.parent.mkdir()
+        os.link(external, misleading)
+        self.start_materialized_dependency_run()
+        report = self.copy_cli("copy", success=False)
+        self.assertEqual(report["external_hardlink_references"], [["docs/node_modules"]])
+        self.assertFalse(os.path.lexists(self.new))
+        self.assertTrue(misleading.samefile(external))
+
     def test_dependency_materialization_rejects_target_links_outside_candidate(self):
         _, first, _ = self.dependency_hardlink_fixture()
         self.start_materialized_dependency_run()

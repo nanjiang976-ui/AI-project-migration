@@ -118,6 +118,45 @@ class JunctionChecks:
         self.assertFalse(os.path.lexists(self.new))
         self.assertEqual((outside / "keep.txt").read_bytes(), b"outside project")
 
+    def test_junction_root_case_alias_maps_when_ntfs_confirms_same_directory(self):
+        case_alias = self.old.with_name(self.old.name.swapcase())
+        target = self.old / "dep"
+        target.mkdir()
+        link = self.old / "alias"
+        nt.create_junction(link, case_alias / "dep", self.old)
+        self.assertIn(case_alias.name, os.readlink(link))
+        self.assertTrue(link.samefile(target))
+        self.copy_verified()
+        self.assertTrue((self.new / link.name).samefile(self.new / target.name))
+        self.prepare("manual")
+        self.old.rename(self.backup)
+        self.apply("manual")
+        self.assertTrue((self.backup / link.name).samefile(self.new / target.name))
+
+    def test_junction_root_case_mismatch_stops_if_ntfs_reports_different_directory(self):
+        case_alias = self.old.with_name(self.old.name.swapcase())
+        target = self.old / "dep"
+        target.mkdir()
+        link = self.old / "alias"
+        nt.create_junction(link, case_alias / "dep", self.old)
+        outside = self.left / "unselected-case-directory"
+        outside.mkdir()
+        object_id = tree_copy.object_id
+        outside_identity = object_id(outside)
+
+        def resolve_identity(path, *, allow_junction=False):
+            if path.parts == case_alias.parts:
+                # NTFS also supports case-sensitive directories with distinct roots.
+                return outside_identity
+            return object_id(path, allow_junction=allow_junction)
+
+        self.audit.mkdir()
+        tree_copy.prepare_audit(self.copy_audit, self.old)
+        with patch.object(tree_copy, "object_id", side_effect=resolve_identity):
+            with self.assertRaisesRegex(ValueError, "outside the selected tree"):
+                tree_copy.copy(self.old, self.new, self.copy_audit, {"run": "case-sensitive-root"})
+        self.assertFalse(os.path.lexists(self.new))
+
     def test_broken_directory_junction_stops_before_creating_candidate(self):
         target = self.old / "original-package"
         target.mkdir()
