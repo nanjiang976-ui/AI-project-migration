@@ -87,15 +87,15 @@ $ai-project-migration I have moved some files by hand and the migration is unfin
 
 If a checkpoint exists, the assistant compares it with the current state and resumes from a verified step. If the originals or verification records are missing, it explains which findings need more evidence. [Resume inspection](skills/ai-project-migration/references/resume.md)
 
-### 5. You created the link and reopened an old chat to verify it
+### 5. The offline command has finished and you want to continue verification
 
-Send the prompt in a chat that **already existed before the migration**.
+Wait for the normal `PS …>` prompt in the separate PowerShell window, or the normal shell prompt in macOS Terminal. Take a screenshot or copy the last few lines before closing that window. Reopen Codex or your agent and return to **the original migration chat**. If you're unsure whether the link was created, attach the screenshot or paste the output.
 
 ```text
-$ai-project-migration The link is in place. Check that it points to the correct destination, then test actual reads and writes from this old chat's default working directory. Confirm that changes reach the new drive and clean up the test file.
+$ai-project-migration The offline command has finished. Check the actual link status and continue verification from the current step.
 ```
 
-For shared folders, check whether old chats from each affected project can access the corresponding source. The report distinguishes readable chat history, reachable paths, and actual reads and writes.
+Test actual reads and writes in chats that existed before the migration. For shared folders, check whether old chats from each affected project can access the corresponding source. The report distinguishes readable chat history, reachable paths, and actual reads and writes.
 
 ### 6. The move is finished and you want to check whether you can remove the backup
 
@@ -104,6 +104,8 @@ $ai-project-migration Run the final verification and report the results for proj
 ```
 
 **⚠️ Keep the folder entry at the original location.** Old chats use it to reach the new drive. Once verification passes, you can manually remove the physical `_迁移备份` backup named in the report.
+
+If new chats were opened solely for verification, the final report lists any temporary verification chats you can manually delete once verification is complete and the evidence has been saved. Keep the original migration chat and any existing chats used for testing.
 
 <a id="update"></a>
 
@@ -131,5 +133,9 @@ The skill lists sources and shared references before copying. Use the batch work
 ### How can I reclaim space on the original drive and keep old chats working with the migrated files?
 
 Once verification passes, manually remove the physical backup from the original drive. Keep the link at the original path, a directory junction on Windows or a directory symlink on macOS, so old chats can still reach the destination. Check each relevant chat's original ID, history, and working directory. Then use representative old chats from each affected project to test actual reads and writes for its migrated sources. Report the number of chats checked separately from what the read and write tests covered. Keep the corresponding backup while any folder or chat still needs verification.
+
+### Why does an old chat still show its original working directory after migration?
+
+For example, Codex may resume an old chat with its original working directory on the C drive after the project's primary folder moves to the D drive. The verified link at the old path (a directory junction on Windows or a directory symlink on macOS) leads to the files in the destination folder. The verification report records which old chats passed read and write tests.
 
 [Full guide](docs/guide.en.md) · [Compatibility and test evidence](docs/guide.en.md#compatibility) · [Troubleshooting](docs/guide.en.md#faq) · [Report an issue](https://github.com/nanjiang976-ui/AI-project-migration/issues) · [MIT license](LICENSE)
