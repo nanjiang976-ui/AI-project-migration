@@ -235,18 +235,28 @@ def link_groups(rows):
     return groups, sorted(external)
 
 
-def inspect_hardlinks(root):
+def inspect_hardlinks(root, *, require_stable=False):
     """Inspect native identities before spending time hashing file contents."""
-    rows = {rel: {"type": "file", "identity": [info.st_dev, info.st_ino],
-                  "link_count": info.st_nlink}
-            for rel, _, info in visit(root) if stat.S_ISREG(info.st_mode)}
+    rows = {}
+    observed = {}
+    for rel, _, info in visit(root):
+        if require_stable:
+            observed[rel] = signature(info)
+        if stat.S_ISREG(info.st_mode):
+            rows[rel] = {"type": "file", "identity": [info.st_dev, info.st_ino],
+                         "link_count": info.st_nlink}
+    if require_stable and observed != {rel: signature(info) for rel, _, info in visit(root)}:
+        raise RuntimeError(f"Source changed during the hardlink scan: {root}")
     return link_groups(rows)
+
+
+def has_dependency_parent(relative):
+    return "node_modules" in relative.casefold().split("/")[:-1]
 
 
 def check_source_hardlinks(external, materialize, report):
     if external and (not materialize or any(
-            "node_modules" not in name.casefold().split("/")[:-1]
-            for members in external for name in members)):
+            not has_dependency_parent(name) for members in external for name in members)):
         report["external_hardlink_references"] = external
         raise ValueError("Source files have hardlinks outside the selected project; "
                          "only explicitly approved node_modules groups can be materialized")

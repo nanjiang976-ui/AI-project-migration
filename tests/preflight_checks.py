@@ -121,7 +121,114 @@ exit $LASTEXITCODE
         report = self.run_preflight("--source", self.old, "--target", destination, env=no_git)
         self.assertEqual(self.preflight_status(report, "volumes"), "passed", report)
         self.assertEqual(self.preflight_status(report, "git"), "not_applicable", report)
+        self.assertNotIn("external_hardlinks", {row["name"] for row in report["checks"]})
+        if sys.platform == "darwin":
+            report = self.run_preflight("--source", self.old, "--target", destination,
+                                        "--inspect-hardlinks", env=no_git)
+            self.assertEqual(self.preflight_status(report, "external_hardlinks"), "not_applicable", report)
         self.assertEqual(before, self.preflight_snapshot(self.old, self.new.parent))
+
+    @unittest.skipUnless(os.name == "nt", "Windows NTFS hardlink fixture")
+    def test_preflight_hardlinks_distinguishes_internal_and_dependency_groups_without_writes(self):
+        from _winapi import CreateJunction
+
+        os.link(self.old / "sample.txt", self.old / "internal-alias.txt")
+        paths = (self.old.parent, self.new.parent)
+        args = ("--source", self.old, "--target", self.new, "--inspect-hardlinks")
+        before = self.preflight_snapshot(*paths)
+        report = self.run_preflight(*args)
+        scan = next(row for row in report["checks"] if row["name"] == "external_hardlinks")
+        self.assertEqual((scan["status"], scan["assessment"], scan["external_groups"]), ("passed", "none", 0))
+        self.assertEqual(before, self.preflight_snapshot(*paths))
+
+        backing = self.old.parent / "external-package.js"
+        backing.write_bytes(b"external package\n")
+        dependencies = self.old / "node_modules"
+        dependencies.mkdir()
+        os.link(backing, dependencies / "package.js")
+        os.link(backing, dependencies / "package-alias.js")
+        CreateJunction(str(dependencies), str(self.old / "directory-alias"))
+        before = self.preflight_snapshot(*paths)
+        report = self.run_preflight(*args, success=False)
+        scan = next(row for row in report["checks"] if row["name"] == "external_hardlinks")
+        self.assertEqual((scan["status"], scan["assessment"]), ("pending", "authorization_required"))
+        self.assertEqual((scan["external_groups"], scan["external_entries"]), (1, 2))
+        self.assertEqual((scan["dependency_groups"], scan["outside_scope_groups"]), (1, 0))
+        self.assertEqual(scan["dependency_examples"], ["node_modules/package-alias.js"])
+        self.assertEqual(before, self.preflight_snapshot(*paths))
+
+    @unittest.skipUnless(os.name == "nt", "Windows NTFS hardlink fixture")
+    def test_preflight_hardlinks_blocks_mixed_group_and_file_named_node_modules(self):
+        dependencies = self.old / "node_modules"
+        dependencies.mkdir()
+        backing = self.old.parent / "store.js"
+        backing.write_bytes(b"a shared package\n")
+        unrelated = self.old.parent / "unrelated"
+        unrelated.write_bytes(b"another shared object\n")
+        docs = self.old / "docs"
+        docs.mkdir()
+        os.link(backing, dependencies / "package.js")
+        os.link(backing, docs / "node_modules")
+        os.link(unrelated, dependencies / "other.js")
+        before = self.preflight_snapshot(self.old.parent, self.new.parent)
+        report = self.run_preflight("--source", self.old, "--target", self.new,
+                                    "--inspect-hardlinks", success=False)
+        scan = next(row for row in report["checks"] if row["name"] == "external_hardlinks")
+        self.assertEqual((scan["status"], scan["assessment"]), ("blocked", "outside_scope"))
+        self.assertEqual((scan["external_groups"], scan["external_entries"]), (2, 3))
+        self.assertEqual((scan["dependency_groups"], scan["outside_scope_groups"]), (1, 1))
+        self.assertEqual(scan["outside_scope_examples"], ["docs/node_modules"])
+        self.assertEqual(before, self.preflight_snapshot(self.old.parent, self.new.parent))
+
+    @unittest.skipUnless(os.name == "nt", "Windows NTFS hardlink fixture")
+    def test_preflight_hardlinks_reads_metadata_and_leaves_unstable_or_blocked_scan_pending(self):
+        code = """
+import sys
+from unittest.mock import patch
+
+sys.path.insert(0, sys.argv[1])
+import preflight
+import tree_copy
+
+visit = tree_copy.visit
+case = sys.argv[4]
+passes = 0
+
+def fixture_visit(root):
+    global passes
+    passes += 1
+    if case == 'permission':
+        raise PermissionError('fixture cannot enumerate source')
+    for rel, path, info in visit(root):
+        if case != 'changed' or passes != 2 or rel != 'sample.txt':
+            yield rel, path, info
+
+sys.argv = ['preflight.py', '--source', sys.argv[2], '--target', sys.argv[3], '--inspect-hardlinks']
+with (patch.object(tree_copy, 'visit', fixture_visit),
+      patch.object(tree_copy, 'read_hash', side_effect=AssertionError('preflight read a payload')),
+      patch.object(tree_copy.nt, 'streams', side_effect=AssertionError('preflight read streams'))):
+    sys.exit(preflight.main())
+"""
+        paths = (self.old.parent, self.new.parent)
+        before = self.preflight_snapshot(*paths)
+        for case, assessment, detail in (
+            ("normal", "none", "No external"),
+            ("permission", "incomplete", "fixture cannot enumerate source"),
+            ("changed", "incomplete", "Source changed during"),
+        ):
+            with self.subTest(case=case):
+                result = self.preflight_process([sys.executable, "-B", "-X", "utf8", "-c", code,
+                                                 SCRIPTS, self.old, self.new, case])
+                self.assertEqual(result.returncode, 0 if case == "normal" else 1,
+                                 self.preflight_diagnostic(result))
+                report = self.preflight_report(result)
+                scan = next(row for row in report["checks"] if row["name"] == "external_hardlinks")
+                self.assertEqual(scan["assessment"], assessment)
+                self.assertIn(detail, scan["detail"])
+                if assessment == "incomplete":
+                    self.assertEqual(scan["status"], "pending")
+                    self.assertNotIn("external_groups", scan)
+                self.assertEqual(before, self.preflight_snapshot(*paths))
 
     def test_preflight_git_project_needs_callable_git(self):
         self.git(self.old, "init", "-q")

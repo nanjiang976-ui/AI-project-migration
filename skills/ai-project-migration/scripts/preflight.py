@@ -137,15 +137,56 @@ def check_git(root):
     return check("git", "passed", "Git and the required read-only worktree commands are available.", **evidence)
 
 
+def check_external_hardlinks(source, volumes):
+    name = "external_hardlinks"
+    if sys.platform != "win32":
+        return check(name, "not_applicable", "This scan applies to Windows NTFS sources.")
+    if volumes["status"] != "passed":
+        return check(name, "pending", "Verify the source and target paths before scanning.",
+                     assessment="incomplete")
+
+    from tree_copy import has_dependency_parent, inspect_hardlinks
+
+    try:
+        _, external = inspect_hardlinks(source, require_stable=True)
+    except (OSError, ValueError, RuntimeError) as error:
+        return check(name, "pending", str(error), assessment="incomplete", path=str(source))
+
+    dependency_groups = []
+    outside_scope_groups = []
+    for members in external:
+        outside_member = next((member for member in members if not has_dependency_parent(member)), None)
+        if outside_member is None:
+            dependency_groups.append(members[0])
+        else:
+            outside_scope_groups.append(outside_member)
+
+    evidence = dict(path=str(source), external_groups=len(external),
+                    external_entries=sum(len(members) for members in external),
+                    dependency_groups=len(dependency_groups), dependency_examples=dependency_groups[:3],
+                    outside_scope_groups=len(outside_scope_groups), outside_scope_examples=outside_scope_groups[:3])
+    if outside_scope_groups:
+        return check(name, "blocked", "External hardlink groups include members outside node_modules directories.",
+                     assessment="outside_scope", **evidence)
+    if dependency_groups:
+        return check(name, "pending", "Creating independent copies of these dependencies requires approval.",
+                     assessment="authorization_required", **evidence)
+    return check(name, "passed", "No external hardlink groups found in the source.", assessment="none", **evidence)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source")
     parser.add_argument("--target")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--git-root", help="Verified physical Git root required by the next resume step")
+    parser.add_argument("--inspect-hardlinks", action="store_true",
+                        help="Read-only scan of a new NTFS source before recording migration authorization")
     args = parser.parse_args()
     if not args.resume and (not args.source or not args.target or args.git_root):
         parser.error("a new migration requires --source and --target; --git-root is for --resume")
+    if args.resume and args.inspect_hardlinks:
+        parser.error("--inspect-hardlinks is for a new migration")
 
     if sys.platform not in ("win32", "darwin"):
         checks = [check("system", "incompatible", "Native Windows or macOS is required.")]
@@ -162,6 +203,8 @@ def main():
             checks.append(check("git", "pending", "The source must be available to determine whether Git applies."))
         else:
             checks.append(check_git(None if args.resume else source))
+        if args.inspect_hardlinks:
+            checks.append(check_external_hardlinks(source, checks[0]))
 
     print(json.dumps({"checks": checks}, ensure_ascii=True))
     return 0 if all(row["status"] in ("passed", "not_applicable") for row in checks) else 1

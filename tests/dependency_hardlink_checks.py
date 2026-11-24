@@ -139,6 +139,23 @@ class DependencyHardlinkChecks:
         self.assertFalse(os.path.lexists(self.new))
         self.assertTrue(outside_scope.samefile(external))
 
+    def test_preflight_hardlinks_does_not_authorize_late_outside_scope_member(self):
+        external, _, _ = self.dependency_hardlink_fixture()
+        report = self.run_preflight("--source", self.old, "--target", self.new,
+                                    "--inspect-hardlinks", success=False)
+        preflight_scan = next(row for row in report["checks"] if row["name"] == "external_hardlinks")
+        self.assertEqual(preflight_scan["assessment"], "authorization_required")
+        self.assertFalse(self.audit.exists())
+        self.start_materialized_dependency_run()
+        outside_scope = self.old / "application.js"
+        os.link(external, outside_scope)
+
+        report = self.copy_cli("copy", success=False)
+        self.assertEqual(report["status"], "stopped")
+        self.assertIn("application.js", report["external_hardlink_references"][0])
+        self.assertFalse(os.path.lexists(self.new))
+        self.assertTrue(outside_scope.samefile(external))
+
     def test_dependency_materialization_and_pnpm_junctions_share_the_full_copy_chain(self):
         self.pnpm_fixture()
         external, first, second = self.dependency_hardlink_fixture()
