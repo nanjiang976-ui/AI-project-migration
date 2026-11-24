@@ -100,8 +100,12 @@ class MigrationTests(CutoverChecks, DependencyHardlinkChecks, JunctionChecks, Pr
     def run_paste(self, line, shell="powershell.exe"):
         # Transport the generated interactive line unchanged, including Unicode.
         encoded = base64.b64encode(line.encode("utf-16le")).decode("ascii")
-        out = self.command([shell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
-        self.assertIn("Junction", out)
+        process = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                                 cwd=self.right, env=self.env, stdin=subprocess.DEVNULL,
+                                 capture_output=True, encoding="utf-8", errors="replace", timeout=120)
+        self.assertEqual(process.returncode, 0, process.stdout + "\n" + process.stderr)
+        self.assertIn("Junction", process.stdout)
+        self.assertIn("进度：旧入口已通过核验", process.stderr)
         self.assertEqual(self.phase(), "linked")
         self.assertTrue(self.old.is_junction() and self.old.samefile(self.new))
 

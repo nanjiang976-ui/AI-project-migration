@@ -1,5 +1,6 @@
 """Coordinate approved local Codex project roots using the single-directory migration tools."""
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -182,11 +183,14 @@ def draft(snapshot, selection):
     return dict(version=1, host_id=host, known_project_ids=list(projects), roots=roots, projects=changes)
 
 
-def invoke(script, *args):
+def invoke(script, *args, stream_progress=False):
+    streams = {"stdout": subprocess.PIPE} if stream_progress else {"capture_output": True}
     result = subprocess.run([sys.executable, "-B", "-X", "utf8", str(HERE / f"{script}.py"),
-                             *map(str, args)], capture_output=True, encoding="utf-8")
+                             *map(str, args)], encoding="utf-8", **streams)
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
+        if stream_progress and not detail:
+            detail = f"子进程退出码 {result.returncode}，请查看该来源的终端错误和诊断"
         raise ValueError(f"{script}: {detail or result.returncode}")
     return result.stdout.strip()
 
@@ -335,10 +339,13 @@ def phase(root, run):
     return seen
 
 
-def preflight_cutover(batch, plan, needs_plans=False):
+def preflight_cutover(batch, plan, needs_plans=False, *, progress=None):
     # Run the full read-only gate over *all* roots before the first rename.
     items = []
     for root in plan["roots"]:
+        if progress is not None:
+            progress.source = root["source"]
+            progress.step("preflight", "检查本来源的离线计划", root["source"])
         run = child_directory(batch, plan, root)
         evidence = copy_verified(root, run)
         snap = verify_baseline(root, run)
@@ -353,7 +360,7 @@ def preflight_cutover(batch, plan, needs_plans=False):
             pending = git_check.verify(Path(root["target"]), snap, allow_source=not needs_plans)
             recheck_verified_copy(original, Path(root["target"]), evidence, renamed=status == "renamed",
                                   pointer_exceptions=git_check.repair_metadata_exceptions(snap, pending),
-                                  source_junction_root=Path(root["source"]))
+                                  source_junction_root=Path(root["source"]), progress=progress)
         items.append((root, run, status))
     return items
 
@@ -365,7 +372,8 @@ def require_history(batch, plan):
 
 
 def shell_for(batch, mode):
-    cmd = (sys.executable,"-B",str(Path(__file__).resolve()),"link","--batch",str(batch),"--mode",mode)
+    cmd = (sys.executable, "-B", "-X", "utf8", str(Path(__file__).resolve()),
+           "link", "--batch", str(batch), "--mode", mode, "--progress")
     if sys.platform == "darwin":
         return f"(cd {shlex.quote(str(batch))} && {shlex.join(cmd)})"
     args = " ".join(cutover.ps_literal(x) for x in cmd)
@@ -396,16 +404,35 @@ def prepare(batch, plan, mode, current_snapshot=None):
                 roots=[dict(id=r["id"],source=r["source"],target=r["target"],backup=r["backup"]) for r, _, _ in items]))
 
 
-def link(batch, plan, mode):
+def link(batch, plan, mode, progress=None):
     require_history(batch, plan)
-    items = preflight_cutover(batch, plan, needs_plans=True)
+    items = preflight_cutover(batch, plan, needs_plans=True, progress=progress)
     if mode == "manual":
-        require(all(status != "ready" for _, _, status in items), "请先完成所有原件的手动改名，再运行同一条命令")
+        first_ready = next((root for root, _, status in items if status == "ready"), None)
+        if progress is not None and first_ready is not None:
+            progress.source = first_ready["source"]
+            progress.step("preflight", "检查尚待手动改名的原件", progress.source)
+        require(first_ready is None, "请先完成所有原件的手动改名，再运行同一条命令")
     for root, run, status in items:
         if status != "linked":
             # The existing cutover validates fresh identities again under its own lock.
-            invoke("cutover", "apply", "--plan", run/"cutover-plan.json", "--mode", mode)
-    pretty(result_status(batch, plan))
+            extra = ()
+            if progress is not None:
+                progress.source = root["source"]
+                progress.step("apply-source", "切换已通过预检的来源", progress.source)
+                extra = ("--progress",)
+            invoke("cutover", "apply", "--plan", run/"cutover-plan.json", "--mode", mode,
+                   *extra, stream_progress=progress is not None)
+    if progress is not None:
+        progress.source = None
+        progress.step("verify", "重新核验批次的旧入口", batch)
+    status = result_status(batch, plan)
+    if progress is not None:
+        if all(row["phase"] == "linked" and "error" not in row for row in status["roots"]):
+            progress.step("complete", "批次旧入口已通过核验", batch)
+        else:
+            progress.step("verify", "批次状态已回读，仍有来源待核验或接续", batch)
+    pretty(status)
 
 
 def source_identity_if_reachable(path):
@@ -531,6 +558,8 @@ def main():
             sub.add_argument("--mode",choices=("manual","auto"),default="auto")
         if name == "prepare":
             sub.add_argument("--snapshot", help="在发出离线命令前核对宿主的当前完整来源清单")
+        if name == "link":
+            sub.add_argument("--progress", action="store_true", help="实时显示离线进度和诊断")
         if name=="confirm":
             sub.add_argument("--snapshot",required=True)
             sub.add_argument("--project-id",required=True)
@@ -546,23 +575,29 @@ def main():
     if args.command=="status":
         pretty(result_status(batch,plan))
         return
-    lock = cutover.stat_if_present(batch/"copy.lock")
-    require(lock is None or (stat.S_ISREG(lock.st_mode) and not cutover.reparse(lock) and lock.st_nlink==1),
-            "批次锁文件异常")
-    with exclusive_lock(batch):
-        if args.command=="stage":
-            stage(batch,plan)
-        elif args.command=="prepare":
-            prepare(batch, plan, args.mode, args.snapshot)
-        elif args.command=="link":
-            link(batch,plan,args.mode)
-        else:
-            confirm(batch,plan,args)
+    progress = cutover.OfflineProgress("batch") if args.command == "link" and args.progress else None
+    if progress is not None:
+        progress.step("preflight", "开始核验批次的全部来源", batch)
+    capture = (progress.diagnosing(batch, plan["batch_dir_id"], lambda: result_status(batch, open_plan(batch)))
+               if progress is not None else nullcontext())
+    with capture:
+        lock = cutover.stat_if_present(batch/"copy.lock")
+        require(lock is None or (stat.S_ISREG(lock.st_mode) and not cutover.reparse(lock) and lock.st_nlink==1),
+                "批次锁文件异常")
+        with exclusive_lock(batch):
+            if args.command=="stage":
+                stage(batch,plan)
+            elif args.command=="prepare":
+                prepare(batch, plan, args.mode, args.snapshot)
+            elif args.command=="link":
+                link(batch,plan,args.mode,progress)
+            else:
+                confirm(batch,plan,args)
 
 
 if __name__=="__main__":
     try:
         main()
     except (OSError, ValueError, KeyError, TypeError, cutover.MigrationError) as exc:
-        print(f"批次停止：{exc}", file=sys.stderr)
+        cutover.terminal_message(f"批次停止：{exc}")
         sys.exit(1)

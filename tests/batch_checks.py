@@ -8,6 +8,8 @@ import subprocess
 import sys
 from uuid import uuid4
 
+from cutover_checks import PAUSE_FIXTURE, SCRIPTS, capture_stalled_progress
+
 
 class ProjectBatchChecks:
     def batch_fixture(self):
@@ -223,19 +225,81 @@ class ProjectBatchChecks:
         conflict = Path(shared["backup"])
         conflict.mkdir()
         (conflict / "sentinel").write_bytes(b"unrelated")
-        self.batch_command("link", "--mode", "auto", success=False)
+        self.batch_command("link", "--mode", "auto", "--progress", success=False)
         self.assertEqual((conflict / "sentinel").read_bytes(), b"unrelated")
         self.assertEqual(self.primary.lstat().st_ino, first_link_id)
         self.assertTrue(self.shared.is_dir())
         self.assertFalse(self.linked_physical(self.shared, self.shared_new))
+        diagnostic, = self.batch.glob("cutover-diagnostic-*.json")
+        failure = self.load_evidence(diagnostic)
+        before_retry = {row["source"]: row for row in failure["status"]["roots"]}
+        self.assertEqual(failure["scope"], "batch")
+        self.assertEqual(failure["source"], str(self.shared))
+        self.assertEqual(before_retry[str(self.primary)]["phase"], "linked")
+        self.assertIn("error", before_retry[str(self.shared)])
         conflict.rename(self.shared.parent / "preserved-conflict")
-        self.batch_command("link", "--mode", "auto")
+        self.batch_command("link", "--mode", "auto", "--progress")
         self.assertEqual(self.primary.lstat().st_ino, first_link_id)
         self.assertTrue(self.linked_physical(self.shared, self.shared_new))
         self.batch_command("link", "--mode", "auto")
         self.assertEqual(self.primary.lstat().st_ino, first_link_id)
         self.assertTrue(all(row["phase"] == "linked" for row in self.current_batch_status()["roots"]))
 
+    def test_batch_progress_streams_the_child_before_the_next_source_runs(self):
+        self.setup_batch()
+        self.batch_command("stage")
+        command = json.loads(self.batch_command("prepare", "--mode", "auto"))["command"]
+        self.assertIn("--progress", command)
+        waiting, resume = self.batch / "waiting", self.batch / "resume"
+        code = PAUSE_FIXTURE + """
+import runpy
+import subprocess
+import sys
+from unittest.mock import patch
+
+script, waiting, resume, *args = sys.argv[1:]
+sys.path.insert(0, str(Path(script).parent))
+run = subprocess.run
+applies = 0
+
+def pause_between_children(argv, *args, **options):
+    global applies
+    if any(Path(value).name == 'cutover.py' for value in argv) and 'apply' in argv:
+        applies += 1
+        if applies == 2:
+            pause_until_released(waiting, resume)
+    return run(argv, *args, **options)
+
+sys.argv = [script, *args]
+with patch.object(subprocess, 'run', pause_between_children):
+    runpy.run_path(script, run_name='__main__')
+"""
+        output, progress = capture_stalled_progress(
+            self, [sys.executable, "-B", "-X", "utf8", "-c", code, SCRIPTS / "project_batch.py",
+                   waiting, resume, "link", "--batch", self.batch, "--mode", "auto", "--progress"],
+            waiting, resume, "进度：旧入口已通过核验",
+        )
+        self.assertIn("进度：批次旧入口已通过核验", progress)
+        status = json.loads(output)
+        self.assertTrue(all(row["phase"] == "linked" for row in status["roots"]))
+        self.assertEqual(status, json.loads(self.batch_command("link", "--mode", "auto")))
+
+    def test_batch_progress_diagnoses_preflight_failure_before_any_rename(self):
+        self.setup_batch()
+        self.batch_command("stage")
+        self.batch_command("prepare", "--mode", "auto")
+        (self.shared_new / "shared.txt").write_bytes(b"late target edit")
+        self.batch_command("link", "--mode", "auto", "--progress", success=False)
+        for original, target in ((self.primary, self.new), (self.shared, self.shared_new)):
+            self.assertFalse(self.linked_physical(original, target))
+            self.assertTrue(original.is_dir())
+            self.assertFalse(Path(self.entity_in(original)["backup"]).exists())
+        report, = self.batch.glob("cutover-diagnostic-*.json")
+        diagnostic = self.load_evidence(report)
+        self.assertEqual((diagnostic["scope"], diagnostic["stage"], diagnostic["source"]),
+                         ("batch", "compare-target", str(self.shared)))
+        self.assertIn("shared.txt", diagnostic["error"])
+        self.assertEqual({row["phase"] for row in diagnostic["status"]["roots"]}, {"ready"})
     def test_batch_preserves_existing_primary_when_moving_shared_secondary(self):
         self.batch_fixture()
         self.new.mkdir()

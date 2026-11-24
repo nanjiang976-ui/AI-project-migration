@@ -1,5 +1,6 @@
 """Prepare an offline directory-link cutover and verify its state on Windows or macOS."""
 import argparse
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import re
 import shlex
 import stat
 import sys
+from time import monotonic
 from uuid import uuid4
 
 PLAN_NAME = "cutover-plan.json"
@@ -20,6 +22,67 @@ def link_type():
 
 class MigrationError(Exception):
     """An unexpected path or state needs attention before proceeding."""
+
+
+def terminal_message(message):
+    """Keep optional terminal output from changing the result of a disk operation."""
+    stream = sys.stderr
+    if stream is None:
+        return
+    try:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        visible = message.encode(encoding, errors="backslashreplace").decode(encoding)
+        print(visible, file=stream, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+class OfflineProgress:
+    errors = (MigrationError, OSError, EOFError, KeyError, RuntimeError, TypeError, ValueError)
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.source = None
+        self.path = None
+        self.stage = "preflight"
+
+    def step(self, stage, message, path=None):
+        self.stage = stage
+        self.path = str(path) if path is not None else None
+        self.message = message
+        self.entries = 0
+        self.next_update = monotonic() + 10
+        location = f" · {path}" if path is not None else ""
+        terminal_message(f"进度：{message}{location}")
+
+    def advance(self):
+        self.entries += 1
+        now = monotonic()
+        if now >= self.next_update:
+            terminal_message(f"进度：{self.message}，已检查 {self.entries} 项")
+            self.next_update = now + 10
+
+    @contextmanager
+    def diagnosing(self, audit, audit_id, read_status):
+        try:
+            yield
+        except (*self.errors, KeyboardInterrupt) as error:
+            try:
+                status = read_status()
+            except self.errors:
+                status = {"phase": "unknown"}
+            try:
+                plain_chain(audit)
+                require(real_dir(audit) == audit_id, "离线记录目录身份已变化")
+                report = audit / f"cutover-diagnostic-{uuid4().hex}.json"
+                save_exclusive(report, dict(version=1, scope=self.scope, stage=self.stage,
+                                            source=self.source, path=self.path, error=str(error),
+                                            status=status))
+            except self.errors:
+                terminal_message("诊断未能保存，请保留终端最后几行。")
+            else:
+                terminal_message(f"诊断：{report}")
+            raise
 
 
 def require(condition, message):
@@ -323,8 +386,8 @@ def prepare(args):
             "该计划已绑定另一个复制审计目录")
     phase, old, dest, _ = state(plan)
     require((source, target) == (old, dest), "该审计目录属于另一项迁移，请使用其对应的接续记录")
-    cmd = (sys.executable, "-B", str(Path(__file__).resolve()),
-           "apply", "--plan", str(plan), "--mode", args.mode)
+    cmd = (sys.executable, "-B", "-X", "utf8", str(Path(__file__).resolve()),
+           "apply", "--plan", str(plan), "--mode", args.mode, "--progress")
     print(f"phase={phase}\nplan={plan}\nbackup={backup}")
     if sys.platform == "darwin":
         print(f"(cd {shlex.quote(str(audit))} && {shlex.join(cmd)})")
@@ -334,10 +397,14 @@ def prepare(args):
               + " -ErrorAction Stop; " + command + " }")
 
 
+def read_status(plan):
+    phase, source, target, backup = state(plan)
+    return dict(phase=phase, link_type=link_type(), source=str(source), target=str(target),
+                backup=str(backup))
+
+
 def status(args):
-    phase, source, target, backup = state(args.plan)
-    print(json.dumps(dict(phase=phase, link_type=link_type(), source=str(source), target=str(target),
-                          backup=str(backup)), ensure_ascii=False))
+    print(json.dumps(read_status(args.plan), ensure_ascii=False))
 
 
 def verified_git_exceptions(data, source, target):
@@ -356,7 +423,7 @@ def verified_git_exceptions(data, source, target):
     return git_check.repair_metadata_exceptions(snap)
 
 
-def apply_locked(args):
+def apply_locked(args, progress=None):
     from tree_copy import recheck_verified_copy
 
     data, source, target, backup = read_plan(args.plan)
@@ -369,12 +436,17 @@ def apply_locked(args):
         original = backup if phase == "renamed" else source
         exceptions = verified_git_exceptions(data, source, target)
         recheck_verified_copy(original, target, evidence, renamed=phase == "renamed",
-                              pointer_exceptions=exceptions, source_junction_root=source)
+                              pointer_exceptions=exceptions, source_junction_root=source,
+                              progress=progress)
         require(observe(data, source, target, backup) == phase, "切换复核期间目录状态发生变化")
     if phase == "ready":
+        if progress is not None:
+            progress.step("rename", "将原件改名为备份", source)
         rename_exclusive(source, backup)
         phase, source, target, backup = state(args.plan)
     if phase == "renamed":
+        if progress is not None:
+            progress.step("link", "建立旧入口", source)
         try:
             if sys.platform == "darwin":
                 os.symlink(target, source, target_is_directory=True)
@@ -384,20 +456,33 @@ def apply_locked(args):
         except (OSError, ImportError) as exc:
             raise MigrationError(f"联接未创建，原件备份位于 {backup}。"
                                  f"排除问题后用同一命令接续。原因：{exc}") from exc
+    if progress is not None:
+        progress.step("verify", "核验旧入口与目标", source)
     phase, source, target, backup = state(args.plan)
     require(phase == "linked", "联接尚未通过检查")
+    if progress is not None:
+        progress.step("complete", "旧入口已通过核验", source)
     print(f"FullName : {source}\nLinkType : {link_type()}\nTarget   : {target}\nBackup   : {backup}")
 
 
 def apply(args):
     from tree_copy import exclusive_lock
+
+    progress = OfflineProgress("directory") if getattr(args, "progress", False) else None
+    if progress is not None:
+        progress.step("preflight", "检查离线计划", args.plan)
     data, _, _, _ = read_plan(args.plan)
-    copy_dir = Path(data["copy_evidence"]["directory"])
-    lock_info = (copy_dir / "copy.lock").lstat()
-    require(stat.S_ISREG(lock_info.st_mode) and not reparse(lock_info) and lock_info.st_nlink == 1,
-            "受管复制锁文件异常")
-    with exclusive_lock(copy_dir):
-        apply_locked(args)
+    if progress is not None:
+        progress.source = data["source"]
+    capture = (progress.diagnosing(Path(data["audit"]), data["audit_id"], lambda: read_status(args.plan))
+               if progress is not None else nullcontext())
+    with capture:
+        copy_dir = Path(data["copy_evidence"]["directory"])
+        lock_info = (copy_dir / "copy.lock").lstat()
+        require(stat.S_ISREG(lock_info.st_mode) and not reparse(lock_info) and lock_info.st_nlink == 1,
+                "受管复制锁文件异常")
+        with exclusive_lock(copy_dir):
+            apply_locked(args, progress)
 
 
 def main():
@@ -415,6 +500,7 @@ def main():
         p.add_argument("--plan", required=True)
         if name == "apply":
             p.add_argument("--mode", choices=("manual", "auto"), required=True)
+            p.add_argument("--progress", action="store_true", help="实时显示离线进度和诊断")
         p.set_defaults(handler=handler)
     args = parser.parse_args()
     args.handler(args)
@@ -424,5 +510,5 @@ if __name__ == "__main__":
     try:
         main()
     except (MigrationError, OSError, EOFError, KeyError, RuntimeError, ValueError) as e:
-        print(f"已停止：{e}", file=sys.stderr)
+        terminal_message(f"已停止：{e}")
         sys.exit(1)

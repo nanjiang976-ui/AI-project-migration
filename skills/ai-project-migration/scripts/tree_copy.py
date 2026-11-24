@@ -193,9 +193,13 @@ def record(path, info, with_hash, *, root=None, junction_root=None):
     return data
 
 
-def snapshot(root, with_hash, *, junction_root=None):
-    return {rel: record(path, st, with_hash, root=root, junction_root=junction_root)
-            for rel, path, st in visit(root)}
+def snapshot(root, with_hash, *, junction_root=None, on_entry=None):
+    rows = {}
+    for rel, path, st in visit(root):
+        rows[rel] = record(path, st, with_hash, root=root, junction_root=junction_root)
+        if on_entry is not None:
+            on_entry()
+    return rows
 
 
 def metadata(row):
@@ -279,12 +283,18 @@ def save_manifest(path, rows):
             out.write(json.dumps({"path": k, **rows[k]}, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
-def verify_manifest(root, manifest, snapshot_tree, exceptions):
+def verify_manifest(root, manifest, snapshot_tree, exceptions, *, progress=None, side=None):
     info = manifest.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (
             os.name == "nt" and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
         raise ValueError(f"需要本次核验的独立普通清单文件：{manifest}")
-    live = snapshot_tree(root, True)
+    if progress is not None:
+        label = "原件" if side == "source" else "目标"
+        progress.step(f"scan-{side}", f"重新读取{label}并计算哈希", root)
+        live = snapshot_tree(root, True, on_entry=progress.advance)
+        progress.step(f"compare-{side}", f"比对{label}的核验清单", root)
+    else:
+        live = snapshot_tree(root, True)
     remaining = set(live)
     with gzip.open(manifest, "rt", encoding="utf-8") as file:
         for line in file:
@@ -296,13 +306,15 @@ def verify_manifest(root, manifest, snapshot_tree, exceptions):
                     != {k: v for k, v in live[name].items() if k not in ignored}):
                 raise ValueError(f"文件在副本验收后变化：{root} / {name}")
             remaining.remove(name)
+            if progress is not None:
+                progress.advance()
     if remaining:
         raise ValueError(f"副本验收后出现额外项：{root} / {min(remaining)}")
     return live
 
 
 def recheck_verified_copy(original, target, evidence, *, renamed, pointer_exceptions,
-                          source_junction_root=None):
+                          source_junction_root=None, progress=None):
     snapshot_tree = snapshot
     if sys.platform == "darwin":
         from mac_tree import snapshot as snapshot_tree
@@ -314,14 +326,20 @@ def recheck_verified_copy(original, target, evidence, *, renamed, pointer_except
     if os.name == "nt":
         original_snapshot = partial(snapshot_tree, junction_root=source_junction_root)
     original_live = verify_manifest(original, directory / (stem + "-source.jsonl.gz"),
-                                    original_snapshot, original_exceptions)
+                                    original_snapshot, original_exceptions, progress=progress, side="source")
     target_live = verify_manifest(target, directory / (stem + "-destination.jsonl.gz"),
-                                  snapshot_tree, pointer_exceptions)
+                                  snapshot_tree, pointer_exceptions, progress=progress, side="target")
     # Revisit metadata after hashing both trees so writes during the other scan
     # can also stop the cutover.
-    for root, live, scan in ((original, original_live, original_snapshot),
-                             (target, target_live, snapshot_tree)):
-        changes = changed_since(live, scan(root, False))
+    for side, label, root, live, scan in (
+            ("source", "原件", original, original_live, original_snapshot),
+            ("target", "目标", target, target_live, snapshot_tree)):
+        if progress is not None:
+            progress.step(f"check-{side}-stability", f"复查{label}是否变化", root)
+            current = scan(root, False, on_entry=progress.advance)
+        else:
+            current = scan(root, False)
+        changes = changed_since(live, current)
         if changes:
             raise ValueError(f"切换复核期间文件发生变化：{root} / {changes[0]}")
 

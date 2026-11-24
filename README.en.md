@@ -93,6 +93,8 @@ If a checkpoint exists, the assistant compares it with the current state and res
 
 Wait for the normal `PS …>` prompt in the separate PowerShell window, or the normal shell prompt in macOS Terminal. Take a screenshot or copy the last few lines before closing that window. Reopen Codex or your agent and return to **the original migration chat**. If you're unsure whether the link was created, attach the screenshot or paste the output.
 
+Newly generated offline commands show progress as they recheck files, rename the original folder and create the link. If the command stops and prints a diagnostic file path, share that path in the original migration chat as well.
+
 ```text
 $ai-project-migration The offline command has finished. Check the actual link status and continue verification from the current step.
 ```

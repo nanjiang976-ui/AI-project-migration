@@ -41,7 +41,7 @@ def entry(path, s, vol_uuid, with_hash):
     return row
 
 
-def snapshot(root, with_hash):
+def snapshot(root, with_hash, *, on_entry=None):
     uuid, dev = fs.volume_info(root)
     fs.physical_chain(root)
     rows = {}
@@ -53,6 +53,8 @@ def snapshot(root, with_hash):
                 not (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode))):
             raise ValueError(f"Unexpected symlink, nested mount, or special file: {path}")
         rows[key] = entry(path, s, uuid, with_hash)
+        if on_entry is not None:
+            on_entry()
         if stat.S_ISDIR(s.st_mode):
             with os.scandir(path) as items:
                 names = sorted((i.name for i in items), reverse=True)
