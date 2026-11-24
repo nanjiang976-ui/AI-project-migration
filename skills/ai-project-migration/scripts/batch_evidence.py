@@ -362,8 +362,8 @@ def root_evidence(directory, data, current, root):
         outcomes.append(dict(project_id=pid, checked_old_chats=n,
                              tested=[actual["session_id"]] if actual else [],
                              request_id=actual["request_id"] if actual else None))
-    verify_backup_files(config, run, probe_dirs, batch=True)
-    return outcomes
+    backup_junctions = verify_backup_files(config, run, probe_dirs, batch=True)
+    return outcomes, backup_junctions
 
 
 def status(args):
@@ -373,11 +373,12 @@ def status(args):
     result = []
     for root in data["roots"]:
         try:
-            outcomes = root_evidence(directory, data, current, root)
+            outcomes, backup_junctions = root_evidence(directory, data, current, root)
             eligible, reason = True, "本次已复验相关项目及当前备份；如有新写入，请重新核验"
         except (MigrationError, ValueError, KeyError, OSError, TypeError, RuntimeError) as exc:
-            eligible, reason, outcomes = False, str(exc), []
-        result.append(dict(source_id=root["id"], **notice(root, eligible, reason), projects=outcomes))
+            eligible, reason, outcomes, backup_junctions = False, str(exc), [], 0
+        cleanup, _ = notice(root, eligible, reason, backup_junctions=backup_junctions)
+        result.append(dict(source_id=root["id"], **cleanup, projects=outcomes))
     print(json.dumps(dict(batch_id=data["batch_id"], roots=result), ensure_ascii=False))
 
 

@@ -212,7 +212,7 @@ def check_current_manifest(root, manifest, *, junction_root=None):
             remaining.remove(path)
     if remaining or changed_since(current, snapshot(root, False)):
         raise ValueError("复核期间文件清单或文件内容发生变化")
-    return len(current)
+    return len(current), sum(row["type"] == "junction" for row in current.values())
 
 
 def verified_link(config, run):
@@ -236,7 +236,7 @@ def cleanup_check(config, run, chat):
 
 
 def verify_backup_files(config, run, probe_wrote, *, batch=False):
-    """Verify the final file receipts against current directory identities and contents."""
+    """Verify current contents and count backup junctions through the old entry."""
     old, target, backup = verified_link(config, run)
     folder = run / "backup-check"
     marker = max(folder.glob("*-started.json"), default=None)
@@ -262,24 +262,33 @@ def verify_backup_files(config, run, probe_wrote, *, batch=False):
     if (set(diffs) - {"mtime_ns"} or set(diffs.get("mtime_ns", [])) - allowed_times
             or comparison.get("source_summary") != comparison.get("destination_summary")):
         raise ValueError("备份有独有内容、两边存在差异或发生了未解释的变更")
+    backup_junctions = 0
     for side, root in (("source", backup), ("destination", target)):
-        count = check_current_manifest(root, folder / (tag + "-" + side + ".jsonl.gz"),
-                                       junction_root=old if side == "source" else None)
+        count, junctions = check_current_manifest(
+            root, folder / (tag + "-" + side + ".jsonl.gz"),
+            junction_root=old if side == "source" else None,
+        )
         summary = comparison[side + "_summary"]
-        if count != summary["files"] + summary["directories_including_root"] + summary.get("junctions", 0):
+        if (junctions != summary.get("junctions", 0)
+                or count != summary["files"] + summary["directories_including_root"] + junctions):
             raise ValueError("文件清单条目数量不符")
-    return "本次已复验备份、目标和许可的时间差异；如继续编辑，请重新核验"
+        if side == "source":
+            # The snapshot accepts a backup junction only when its raw target is under old.
+            backup_junctions = junctions
+    verified_link(config, run)
+    return backup_junctions
 
 
-def notice(config, eligible, reason):
+def notice(config, eligible, reason, *, backup_junctions=0):
     old, new, backup = (config[k] for k in ("source", "target", "backup"))
     warning = f"⚠️ 请勿删除原位置下的原名文件夹：{old}"
     try:
         target_path = local_path(new)
         verify_link_target(local_path(old), target_path)
         real_dir(target_path)
-    except (MigrationError, OSError, ValueError):
-        pass
+    except (MigrationError, OSError, ValueError) as exc:
+        if eligible:
+            eligible, reason = False, str(exc)
     else:
         kind = "Windows 目录联接" if os.name == "nt" else "macOS 目录符号链接"
         warning += (f"\n这里是通往项目新位置的{kind}，旧聊天仍可通过它访问项目。"
@@ -287,9 +296,13 @@ def notice(config, eligible, reason):
                     "删除入口会使旧路径失效。进入其中删除文件会直接影响目标盘上的项目文件。")
     backup_message = (f"验收通过后可手动清理的实体备份：{backup}" if eligible
                       else f"⛔ 暂勿清理备份：{backup}")
+    backup_message += "。" + reason
+    if eligible and backup_junctions:
+        backup_message += (f"\n⚠️ 备份内有 {backup_junctions:,} 个目录联接可经旧入口访问新项目。"
+                           "进入这些联接删除文件，会影响正在使用的项目。")
     return dict(warning=warning,
                 target=new, target_message=f"正在使用的项目实体，必须保留：{new}",
-                backup=backup, eligible=eligible, backup_message=backup_message + "。" + reason)
+                backup=backup, eligible=eligible, backup_message=backup_message), reason
 
 
 def record(args):
@@ -305,15 +318,18 @@ def record(args):
     events = [read(p) for p in sorted(run.glob("event-*.json"))]
     step, chat, pending = current_progress(events)
     eligible = False
+    backup_junctions = 0
     reason = "核验未完成"
     marking_final = step == 7 and args.command == "mark" and args.status == "passed"
     if marking_final or (step > 7 and args.command == "show"):
         try:
-            reason = cleanup_check(config, run, chat)
+            backup_junctions = cleanup_check(config, run, chat)
             eligible = True
+            reason = "本次已复验备份、目标和许可的时间差异；如继续编辑，请重新核验"
         except (OSError, ValueError, KeyError, RuntimeError, TypeError, MigrationError) as exc:
             reason = str(exc)
 
+    cleanup, reason = notice(config, eligible, reason, backup_junctions=backup_junctions)
     rejected = False
     if args.command in ("mark", "reopen"):
         if args.command == "reopen":
@@ -332,7 +348,7 @@ def record(args):
             event.update(bind_probe(args, config, run, pending, events))
         elif getattr(args, "request_id", None) is not None or getattr(args, "session_id", None) is not None:
             raise ValueError("A session binding applies only to step 6 waiting or passed.")
-        if marking_final and not eligible:
+        if marking_final and not cleanup["eligible"]:
             event.update(status="blocked", verification_error=reason)
             rejected = True
         save_exclusive(run / f"event-{len(events) + 1:06}.json", event)
@@ -340,7 +356,7 @@ def record(args):
         if event["status"] in FINISHED:
             step += 1
 
-    result = dict(cleanup_notice=notice(config, eligible, reason), run=str(run), config=config,
+    result = dict(cleanup_notice=cleanup, run=str(run), config=config,
                   next_step=step if step <= 7 else None, last_event=events[-1] if events else None)
     print(json.dumps(result, ensure_ascii=False))
     if rejected:

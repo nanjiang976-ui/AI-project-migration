@@ -65,7 +65,7 @@ Use the Codex batch workflow to move one secondary source, several selected sour
 | 6. Test an old chat | Checks the link, original session identity and two-way reads/writes from its default directory | **Choose A/B after restart and link verification**; use an existing chat from before the move | The chat reaches the same file at the destination and the temporary probe is removed |
 | 7. Review | Reports history access, actual writes, Git worktrees and the source-drive backup separately | After acceptance, decide whether to manually remove the backup | Any unique or different data has been accounted for |
 
-**Step 5.** The assistant gives you one command for your chosen method, with a guide to opening the terminal on your system. Save the command before quitting programs using the project. On Windows, fully quit desktop apps, including the tray app. With A, rename the original in File Explorer or Finder as instructed, then run the command in a separate terminal outside the project to create the link. With B, run the command from that terminal to rename the folder, create the link and check it. After restarting the agent, say “The link is in place.” The assistant verifies the current state and resumes from there. [Windows illustration](../skills/ai-project-migration/assets/open-terminal-windows.png) · [macOS illustration](../skills/ai-project-migration/assets/open-terminal-macos.png)
+**Step 5.** The assistant gives you one command for your chosen method, with a guide to opening the terminal on your system. Save the command before quitting programs using the project. On Windows, fully quit desktop apps, including the tray app. With A, rename the original in File Explorer or Finder as instructed, then run the command in a separate terminal outside the project to create the link. With B, run the command from that terminal to rename the folder, create the link and check it. When the normal prompt returns, capture the last few lines before closing the window. Return to the original migration chat so the assistant can verify the current state and resume. [Windows illustration](../skills/ai-project-migration/assets/open-terminal-windows.png) · [macOS illustration](../skills/ai-project-migration/assets/open-terminal-macos.png)
 
 For a single folder, the offline command rechecks the original and the destination. If files have changed since verification, cutover stops. Keep both folders, including the backup if you already renamed the original, and share the error so the assistant can resume from the current state.
 
@@ -75,6 +75,8 @@ For a single folder, the offline command rechecks the original and the destinati
 
 > [!CAUTION]
 > **⚠️ Keep the folder entry at the original project path.** Keeping this link takes up almost no disk space. Removing it breaks the old address. Deleting files *inside* that folder can delete active files on the destination drive.
+>
+> If the final report identifies junctions inside the backup that reach the new project through the original path, avoid opening those junctions to delete files.
 
 ```text
 Windows example

@@ -178,6 +178,9 @@ class JunctionChecks:
         backup_alias = self.backup / "node_modules" / "package-a"
         self.assertIn(str(self.old), os.readlink(backup_alias))
         self.assertIn(str(self.new), os.readlink(self.new / "node_modules" / "package-a"))
+        backup_alias_file = backup_alias / "index.js"
+        self.assertTrue(backup_alias_file.samefile(self.new / self.package_a_relative / "index.js"))
+        self.assertFalse(backup_alias_file.samefile(self.backup / self.package_a_relative / "index.js"))
         request = str(uuid4())
         session = "fixture-original-pnpm-chat"
         self.helper("run_record", "mark", "--run", self.audit, "--step", 6, "--status", "waiting",
@@ -189,10 +192,29 @@ class JunctionChecks:
         differences = self.command_for_final_comparison()
         self.assertLessEqual(set(differences), {"mtime_ns"})
         self.assertLessEqual(set(differences.get("mtime_ns", [])), {"."})
-        self.assert_cleanup(self.mark_fixture(7), True, linked=True)
+        marked = self.mark_fixture(7)
+        self.assert_cleanup(marked, True, linked=True)
+        shown = json.loads(self.helper("run_record", "show", "--run", self.audit))
+        self.assert_cleanup(shown, True, linked=True)
+        for result in (marked, shown):
+            self.assertRegex(result["cleanup_notice"]["backup_message"],
+                             r"3\s*个[^。]*可经旧入口访问新项目")
+        correct_entry = self.left / "retained-correct-entry"
+        wrong_target = self.right / "wrong-target"
+        wrong_target.mkdir()
+        self.old.rename(correct_entry)
+        CreateJunction(str(wrong_target), str(self.old))
+        redirected = json.loads(self.helper("run_record", "show", "--run", self.audit))
+        self.assert_cleanup(redirected, False)
+        self.assertNotIn("可经旧入口访问新项目", redirected["cleanup_notice"]["backup_message"])
+        self.old.rename(self.left / "retained-wrong-entry")
+        correct_entry.rename(self.old)
+        self.assertTrue(self.old.samefile(self.new))
+
         (self.backup / self.package_a_relative / "index.js").write_bytes(b"unique backup package bytes")
-        self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)),
-                            False, linked=True)
+        stale = json.loads(self.helper("run_record", "show", "--run", self.audit))
+        self.assert_cleanup(stale, False, linked=True)
+        self.assertNotIn("可经旧入口访问新项目", stale["cleanup_notice"]["backup_message"])
 
     def test_pnpm_junction_manual_rename_rechecks_preserved_original(self):
         self.pnpm_fixture()

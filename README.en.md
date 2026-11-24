@@ -105,6 +105,8 @@ $ai-project-migration Run the final verification and report the results for proj
 
 **⚠️ Keep the folder entry at the original location.** Old chats use it to reach the new drive. Once verification passes, you can manually remove the physical `_迁移备份` backup named in the report.
 
+If the report identifies junctions inside the backup that reach the new project through the original path, avoid opening those junctions to delete files. Files deleted through them are deleted from the live project.
+
 If new chats were opened solely for verification, the final report lists any temporary verification chats you can manually delete once verification is complete and the evidence has been saved. Keep the original migration chat and any existing chats used for testing.
 
 <a id="update"></a>

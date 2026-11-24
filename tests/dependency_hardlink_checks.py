@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from _winapi import CreateJunction
 import migration_ntfs as nt
 import tree_copy
 
@@ -257,7 +258,9 @@ class DependencyHardlinkChecks:
         differences = self.command_for_final_comparison()
         self.assertLessEqual(set(differences), {"mtime_ns"})
         self.assertLessEqual(set(differences.get("mtime_ns", [])), {"."})
-        self.assert_cleanup(self.mark_fixture(7), True, linked=True)
+        final = self.mark_fixture(7)
+        self.assert_cleanup(final, True, linked=True)
+        self.assertNotIn("可经旧入口访问新项目", final["cleanup_notice"]["backup_message"])
         external.write_bytes(b"new bytes reachable only from preserved source aliases")
         self.assertEqual((self.new / first).read_bytes(), b"package bytes\n")
         self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)),
@@ -278,11 +281,11 @@ class DependencyHardlinkChecks:
     def test_dependency_materialization_shared_batch_accepts_independent_target_and_rechecks_backup(self):
         self.batch_fixture()
         external, first, _ = self.dependency_hardlink_fixture(self.shared)
-        choice = self.choice(self.shared, self.shared_new, ["demo", "library"])
-        choice["materialize_dependency_hardlinks"] = True
-        self.selection = self.write_batch_evidence("shared-dependencies-only.json", {
-            "sources": [choice], "allow_same_volume": False,
-        })
+        alias = Path("node_modules") / "package"
+        CreateJunction(str(self.shared / first.parent), str(self.shared / alias))
+        selection = self.load_evidence(self.selection)
+        selection["sources"][1]["materialize_dependency_hardlinks"] = True
+        self.selection = self.write_batch_evidence("shared-dependencies.json", selection)
         self.batch_command("create", "--snapshot", self.source_snapshot, "--selection", self.selection)
         self.synthetic_history("before")
         self.batch_command("stage")
@@ -296,16 +299,30 @@ class DependencyHardlinkChecks:
         self.accept_project("demo", readback)
         self.accept_project("library", readback)
         self.synthetic_history("after")
-        self.record_new_chat("demo", self.primary, self.primary, self.shared_new, self.untouched)
+        self.record_new_chat("demo", self.new, self.new, self.shared_new, self.untouched)
         self.record_new_chat("library", self.shared_new, self.shared_new)
-        for project, cwd in (("demo", self.primary), ("library", self.shared)):
+        for project, source, cwd in (("demo", self.primary, self.primary),
+                                     ("demo", self.shared, self.primary),
+                                     ("library", self.shared, self.shared)):
             request = str(uuid4())
-            self.register_probe(project, self.shared, project + "-old", request)
+            self.register_probe(project, source, project + "-old", request)
             self.attached_probe(request, cwd)
             self.attest_probe(project, project + "-old", request)
+        self.verify_batch_backup(self.primary)
         self.verify_batch_backup(self.shared)
-        self.assertTrue(self.batch_cleanup_status(readback)[root["id"]]["eligible"])
+        backup_alias_file = Path(root["backup"]) / alias / first.name
+        self.assertTrue(backup_alias_file.samefile(self.shared_new / first))
+        self.assertFalse(backup_alias_file.samefile(Path(root["backup"]) / first))
+        primary_id = self.entity_in(self.primary)["id"]
+        final = self.batch_cleanup_status(readback)
+        self.assertTrue(final[primary_id]["eligible"], final[primary_id])
+        self.assertNotIn("可经旧入口访问新项目", final[primary_id]["backup_message"])
+        self.assertTrue(final[root["id"]]["eligible"], final[root["id"]])
+        self.assertRegex(final[root["id"]]["backup_message"], r"1\s*个[^。]*可经旧入口访问新项目")
         self.assertFalse((self.shared_new / first).samefile(external))
         external.write_bytes(b"unique preserved dependency-store change")
         self.assertEqual((self.shared_new / first).read_bytes(), b"package bytes\n")
-        self.assertFalse(self.batch_cleanup_status(readback)[root["id"]]["eligible"])
+        stale = self.batch_cleanup_status(readback)
+        self.assertTrue(stale[primary_id]["eligible"], stale[primary_id])
+        self.assertFalse(stale[root["id"]]["eligible"], stale[root["id"]])
+        self.assertNotIn("可经旧入口访问新项目", stale[root["id"]]["backup_message"])
