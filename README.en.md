@@ -79,6 +79,8 @@ $ai-project-migration Demo has several source folders. List the full path of eac
 
 To move one secondary source, add “Keep the existing primary folder.” The batch workflow applies even if only this project uses the secondary folder. To verify the move, use an original chat started from the primary folder. The probe keeps that chat's default working directory and tests two-way reads and writes to the migrated files through the secondary folder's old path. If you select a shared folder, the assistant lists the affected projects and waits for you to confirm which ones to update.
 
+If any source lists need your input, the assistant fills in what it has verified and asks for the missing details together. If you need to edit sources manually, it lists the remaining changes for each project so you can save the changes and report back once. [Batch workflow](skills/ai-project-migration/references/batch.md#source-inventory)
+
 ### 4. You moved some files by hand or paused a migration
 
 ```text
