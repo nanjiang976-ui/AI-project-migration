@@ -2,7 +2,6 @@
 import argparse
 from datetime import datetime, timezone
 from functools import partial
-import gzip
 import json
 import os
 from pathlib import Path
@@ -10,7 +9,7 @@ import sys
 from uuid import UUID, uuid4
 
 from cutover import MigrationError, local_path, real_dir, save_exclusive, verify_link_target
-from tree_copy import POLICY_KEY, read_hardlink_policy
+from tree_copy import POLICY_KEY, changed_since, read_hardlink_policy, verify_manifest
 
 
 FINISHED = {"passed", "not_applicable", "unverified"}
@@ -194,27 +193,6 @@ def git_time_exceptions(run, old, target, *, batch=False):
     return {".git/worktrees/" + tree["admin"] + "/gitdir" for tree in before["snapshot"]["linked"]}
 
 
-def check_current_manifest(root, manifest, *, junction_root=None):
-    from tree_copy import changed_since
-    if sys.platform == "darwin":
-        from mac_tree import snapshot
-    else:
-        from tree_copy import snapshot
-        snapshot = partial(snapshot, junction_root=junction_root)
-    current = snapshot(root, True)
-    remaining = set(current)
-    with gzip.open(manifest, "rt", encoding="utf-8") as saved:
-        for line in saved:
-            row = json.loads(line)
-            path = row.pop("path")
-            if path not in remaining or current[path] != row:
-                raise ValueError("文件已变化；请重新比较备份和目标")
-            remaining.remove(path)
-    if remaining or changed_since(current, snapshot(root, False)):
-        raise ValueError("复核期间文件清单或文件内容发生变化")
-    return len(current), sum(row["type"] == "junction" for row in current.values())
-
-
 def verified_link(config, run):
     from cutover import state
     phase, old, target, backup = state(run / "cutover-plan.json")
@@ -262,15 +240,26 @@ def verify_backup_files(config, run, probe_wrote, *, batch=False):
     if (set(diffs) - {"mtime_ns"} or set(diffs.get("mtime_ns", [])) - allowed_times
             or comparison.get("source_summary") != comparison.get("destination_summary")):
         raise ValueError("备份有独有内容、两边存在差异或发生了未解释的变更")
+    if os.name == "nt":
+        from tree_copy import snapshot
+        backup_snapshot = partial(snapshot, junction_root=old)
+    else:
+        from mac_tree import snapshot
+        backup_snapshot = snapshot
+    trees = (("source", backup, backup_snapshot), ("destination", target, snapshot))
+    current = [
+        verify_manifest(root, folder / (tag + "-" + side + ".jsonl.gz"), scan, {})
+        for side, root, scan in trees
+    ]
+    # Recheck both trees after hashing either side so a change during the other scan is caught.
     backup_junctions = 0
-    for side, root in (("source", backup), ("destination", target)):
-        count, junctions = check_current_manifest(
-            root, folder / (tag + "-" + side + ".jsonl.gz"),
-            junction_root=old if side == "source" else None,
-        )
+    for (side, root, scan), rows in zip(trees, current):
+        if changed_since(rows, scan(root, False)):
+            raise ValueError(f"复核期间文件清单或文件内容发生变化：{root}")
+        junctions = sum(row["type"] == "junction" for row in rows.values())
         summary = comparison[side + "_summary"]
         if (junctions != summary.get("junctions", 0)
-                or count != summary["files"] + summary["directories_including_root"] + junctions):
+                or len(rows) != summary["files"] + summary["directories_including_root"] + junctions):
             raise ValueError("文件清单条目数量不符")
         if side == "source":
             # The snapshot accepts a backup junction only when its raw target is under old.

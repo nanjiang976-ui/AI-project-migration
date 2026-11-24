@@ -1,6 +1,9 @@
 """Behavior shared by the native Windows and macOS fixture suites."""
 import json
 import os
+from pathlib import Path
+import sys
+from unittest.mock import patch
 from uuid import uuid4
 
 
@@ -70,6 +73,41 @@ class RecordChecks:
         self.helper("run_record", "mark", "--run", self.audit, "--step", 7, "--status", "passed",
                     "--evidence", "synthetic; host history unavailable", "--next-action", "end", success=False)
         self.assert_cleanup(json.loads(self.helper("run_record", "show", "--run", self.audit)), False)
+
+    def test_backup_change_during_destination_scan_invalidates_cleanup(self):
+        self.helper("run_record", "start", self.old, self.new, "--run", self.audit,
+                    "--host", "generic", "--allow-same-volume")
+        self.helper("git_check", "baseline", self.old, "--out", self.audit / "git-before.json")
+        for action in ("copy", "verify"):
+            self.helper("tree_copy", action, self.old, self.new, "--audit", self.copy_audit)
+        self.prepare("auto")
+        self.helper("cutover", "apply", "--plan", self.plan, "--mode", "auto")
+        self.helper("tree_copy", "verify", self.backup, self.new,
+                    "--audit", self.audit / "backup-check")
+        config = json.loads((self.audit / "run.json").read_text(encoding="utf-8"))
+
+        scripts = Path(__file__).resolve().parents[1] / "skills" / "ai-project-migration" / "scripts"
+        with patch.object(sys, "path", [str(scripts), *sys.path]):
+            from run_record import verify_backup_files
+            if os.name == "nt":
+                import tree_copy as tree
+            else:
+                import mac_tree as tree
+
+        original_snapshot = tree.snapshot
+        added = self.backup / "added-during-destination-scan.txt"
+
+        def change_backup_after_destination_snapshot(root, with_hash, **options):
+            rows = original_snapshot(root, with_hash, **options)
+            if root == self.new and with_hash:
+                added.write_bytes(b"late backup file")
+            return rows
+
+        with patch.object(tree, "snapshot", side_effect=change_backup_after_destination_snapshot):
+            with self.assertRaisesRegex(ValueError, "复核期间"):
+                verify_backup_files(config, self.audit, False)
+        self.assertEqual(added.read_bytes(), b"late backup file")
+        self.assertFalse((self.new / added.name).exists())
 
     def test_generic_manual_session_receipt_binding(self):
         # The executor and owning agent may differ. Simulate a generic host with
